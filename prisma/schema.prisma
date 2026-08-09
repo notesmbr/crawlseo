@@ -85,6 +85,8 @@ model Site {
   userId      String
   domain      String   // e.g. "brandson.digital"
   gscProperty String?  // e.g. "sc-domain:brandson.digital"
+  crawlBaselineId         String?
+  crawlBaselineVerifiedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -183,8 +185,12 @@ model Crawl {
   finishedAt  DateTime?
   pagesFound  Int         @default(0)
   issuesFound Int         @default(0)
-  healthScore Int?        // 0-100
-  maxPages    Int         @default(200)
+  healthScore Int?        // 0-100, informational until the rules are calibrated
+  maxPages    Int         @default(1000)
+  isBaseline          Boolean     @default(false)
+  baselineVerifiedAt  DateTime?
+  newIssuesFound      Int         @default(0)
+  verifiedIssuesFound Int         @default(0)
 
   site        Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
   issues      CrawlIssue[]
@@ -267,10 +273,17 @@ model CrawlIssue {
   severity    IssueSeverity
   message     String
   details     Json?         // Additional context
+  fingerprint      String?
+  isNew            Boolean       @default(false)
+  isActionable     Boolean       @default(false)
+  isVerified       Boolean       @default(false)
+  suppressedReason String?
 
   crawl       Crawl         @relation(fields: [crawlId], references: [id], onDelete: Cascade)
 
   @@index([crawlId, type])
+  @@index([crawlId, isNew, isVerified])
+  @@index([fingerprint])
 }
 
 enum IssueType {

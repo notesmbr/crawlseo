@@ -18,7 +18,11 @@ export function CrawlButton({ siteId }: { siteId: string }) {
     setMsg(null);
     setErr(false);
     try {
-      const res = await fetch(`/api/sites/${siteId}/crawl`, { method: "POST" });
+      const res = await fetch(`/api/sites/${siteId}/crawl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxPages: 1_000 }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Crawl failed");
       setMsg(`Crawl started (ID: ${data.crawlId?.slice(0, 8)}...)`);
@@ -39,7 +43,7 @@ export function CrawlButton({ siteId }: { siteId: string }) {
         disabled={loading}
         onClick={run}
       >
-        {loading ? "Starting…" : "Run crawl"}
+        {loading ? "Starting…" : "Run full crawl"}
       </Button>
       {msg && (
         <p className={cn("text-atom-caption", err ? "text-danger" : "text-signal")}>

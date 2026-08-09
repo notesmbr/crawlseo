@@ -3,9 +3,15 @@ import { lookup } from "dns/promises";
 import { db } from "@/lib/db";
 import type { IssueSeverity, IssueType } from "@prisma/client";
 import robotsParser from "robots-parser";
+import {
+  classifyCrawlIssues,
+  countImagesMissingAlt,
+  sitemapQueueUrls,
+} from "./policy";
 import { REMEDIATION } from "./remediation";
 
 const ABSOLUTE_MAX_PAGES = 2000;
+const DEFAULT_MAX_PAGES = 1000;
 const BATCH_SIZE = 15;
 const BATCH_DELAY_MS = 100;
 const FETCH_TIMEOUT_MS = 12_000;
@@ -244,11 +250,7 @@ function parseHtml(
   });
 
   // Images
-  const imgTags = [...html.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0]);
-  const imageCount = imgTags.length;
-  const imagesMissingAlt = imgTags.filter(
-    (tag) => !/\balt\s*=\s*["'][^"']+["']/i.test(tag)
-  ).length;
+  const { imageCount, imagesMissingAlt } = countImagesMissingAlt(html);
 
   // Body text and word count
   const bodyText = stripTags(html);
@@ -464,7 +466,7 @@ function parseSitemapUrls(xml: string, base: string): string[] {
 /*  Issue detection per page                                          */
 /* ------------------------------------------------------------------ */
 
-function issuesFromPage(page: PageSnapshot, _seedOrigin: string): IssueInput[] {
+function issuesFromPage(page: PageSnapshot): IssueInput[] {
   const issues: IssueInput[] = [];
   const { url } = page;
 
@@ -599,6 +601,10 @@ export type CrawlResult = {
   pagesFound: number;
   issuesFound: number;
   healthScore: number;
+  newIssuesFound: number;
+  verifiedIssuesFound: number;
+  hasVerifiedBaseline: boolean;
+  baselineCrawlId: string | null;
   sitemapUrls: number;
   missingFromSitemap: number;
   orphanCandidates: number;
@@ -616,7 +622,7 @@ export type CrawlResult = {
 export async function runSiteCrawl(
   siteId: string,
   domain: string,
-  maxPages: number = 200,
+  maxPages: number = DEFAULT_MAX_PAGES,
   existingCrawlId?: string
 ): Promise<CrawlResult> {
   const effectiveMax = Math.max(1, Math.min(maxPages, ABSOLUTE_MAX_PAGES));
@@ -627,13 +633,14 @@ export async function runSiteCrawl(
   const crawl = existingCrawlId
     ? await db.crawl.update({
         where: { id: existingCrawlId },
-        data: { status: "RUNNING", startedAt: new Date() },
+        data: { status: "RUNNING", startedAt: new Date(), maxPages: effectiveMax },
       })
     : await db.crawl.create({
         data: {
           siteId,
           status: "RUNNING",
           startedAt: new Date(),
+          maxPages: effectiveMax,
         },
       });
 
@@ -656,7 +663,7 @@ export async function runSiteCrawl(
 
 async function executeCrawl(
   crawlId: string,
-  _siteId: string,
+  siteId: string,
   seedUrl: string,
   origin: string,
   maxPages: number
@@ -725,7 +732,7 @@ async function executeCrawl(
     });
   } else {
     // Seed queue from sitemap
-    for (const u of sitemapUrls.slice(0, 100)) {
+    for (const u of sitemapQueueUrls(sitemapUrls, maxPages)) {
       if (!queue.includes(u)) queue.push(u);
     }
   }
@@ -827,7 +834,7 @@ async function executeCrawl(
 
       pages.push(page);
       allLinks.push(...page.links);
-      issues.push(...issuesFromPage(page, origin));
+      issues.push(...issuesFromPage(page));
 
       // Enqueue discovered internal links
       for (const link of page.internalOutlinks) {
@@ -934,6 +941,58 @@ async function executeCrawl(
     });
   }
 
+  /* ---- Verified baseline comparison ---- */
+  const baselineState = await db.site.findUnique({
+    where: { id: siteId },
+    select: { crawlBaselineId: true, crawlBaselineVerifiedAt: true },
+  });
+  const hasVerifiedBaseline = Boolean(
+    baselineState?.crawlBaselineId && baselineState.crawlBaselineVerifiedAt,
+  );
+  const baselineRows = hasVerifiedBaseline
+    ? await db.crawlIssue.findMany({
+        where: {
+          crawlId: baselineState!.crawlBaselineId!,
+          fingerprint: { not: null },
+        },
+        select: { fingerprint: true },
+      })
+    : [];
+  const previousComparableCrawl = hasVerifiedBaseline
+    ? await db.crawl.findFirst({
+        where: {
+          siteId,
+          status: "COMPLETED",
+          isBaseline: false,
+          id: { not: crawlId },
+          finishedAt: { gt: baselineState!.crawlBaselineVerifiedAt! },
+        },
+        orderBy: { finishedAt: "desc" },
+        select: { id: true },
+      })
+    : null;
+  const previousRows = previousComparableCrawl
+    ? await db.crawlIssue.findMany({
+        where: {
+          crawlId: previousComparableCrawl.id,
+          fingerprint: { not: null },
+          isNew: true,
+        },
+        select: { fingerprint: true },
+      })
+    : [];
+  const classifiedIssues = classifyCrawlIssues(issues, {
+    hasVerifiedBaseline,
+    baselineFingerprints: new Set(
+      baselineRows.flatMap((row) => (row.fingerprint ? [row.fingerprint] : [])),
+    ),
+    previousFingerprints: new Set(
+      previousRows.flatMap((row) => (row.fingerprint ? [row.fingerprint] : [])),
+    ),
+  });
+  const newIssuesFound = classifiedIssues.filter((issue) => issue.isNew).length;
+  const verifiedIssuesFound = classifiedIssues.filter((issue) => issue.isVerified).length;
+
   /* ---- Compute scores ---- */
   const healthScore = computeHealthScore(issues, pages.length);
   const avgContentScore =
@@ -1000,7 +1059,9 @@ async function executeCrawl(
   }
 
   /* ---- Persist CrawlIssue records ---- */
-  const toSave = issues.slice(0, 1000);
+  // Keep the full issue set for 1,000-page BlueStreamFly crawls. Truncating at
+  // 1,000 made stable findings beyond the cap look new on the following run.
+  const toSave = classifiedIssues.slice(0, 5_000);
   if (toSave.length) {
     await db.crawlIssue.createMany({
       data: toSave.map((i) => ({
@@ -1010,6 +1071,11 @@ async function executeCrawl(
         severity: i.severity,
         message: i.message,
         details: (i.details ?? undefined) as undefined | Record<string, string | number | boolean | null>,
+        fingerprint: i.fingerprint,
+        isNew: i.isNew,
+        isActionable: i.isActionable,
+        isVerified: i.isVerified,
+        suppressedReason: i.suppressedReason,
       })),
     });
   }
@@ -1076,6 +1142,8 @@ async function executeCrawl(
       pagesFound: pages.length,
       issuesFound: finalIssues,
       healthScore,
+      newIssuesFound,
+      verifiedIssuesFound,
     },
   });
 
@@ -1084,6 +1152,10 @@ async function executeCrawl(
     pagesFound: pages.length,
     issuesFound: finalIssues,
     healthScore,
+    newIssuesFound,
+    verifiedIssuesFound,
+    hasVerifiedBaseline,
+    baselineCrawlId: baselineState?.crawlBaselineId ?? null,
     sitemapUrls: sitemapUrls.length,
     missingFromSitemap: missingFromSitemap.length,
     orphanCandidates: orphans.length,

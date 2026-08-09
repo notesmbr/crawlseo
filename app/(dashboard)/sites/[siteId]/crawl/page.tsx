@@ -17,7 +17,11 @@ export default async function CrawlPage({ params }: Props) {
 
   const site = await db.site.findUnique({
     where: { id: siteId },
-    select: { userId: true, domain: true },
+    select: {
+      userId: true,
+      domain: true,
+      crawlBaselineVerifiedAt: true,
+    },
   });
   if (!site || site.userId !== session?.user?.id) redirect("/sites");
 
@@ -38,7 +42,7 @@ export default async function CrawlPage({ params }: Props) {
           },
         },
         orderBy: [{ severity: "asc" }, { type: "asc" }],
-        take: 200,
+        take: 1_000,
       },
     },
   });
@@ -48,7 +52,7 @@ export default async function CrawlPage({ params }: Props) {
     ? await db.auditPage.findMany({
         where: { crawlId: latest.id },
         orderBy: { contentScore: "desc" },
-        take: 200,
+        take: 1_000,
       })
     : [];
 
@@ -56,25 +60,27 @@ export default async function CrawlPage({ params }: Props) {
     const kind = (i.details as { kind?: string } | null)?.kind;
     return kind !== "crawl_summary" && kind !== "content_score";
   }) || [];
+  const attentionIssues = realIssues.filter(
+    (issue) => issue.isNew && issue.isActionable && issue.isVerified,
+  );
+  const referenceIssueCount = Math.max(0, realIssues.length - attentionIssues.length);
 
   const bySeverity = {
-    CRITICAL: realIssues.filter((i) => i.severity === "CRITICAL").length,
-    WARNING: realIssues.filter((i) => i.severity === "WARNING").length,
-    INFO: realIssues.filter((i) => i.severity === "INFO").length,
+    CRITICAL: attentionIssues.filter((i) => i.severity === "CRITICAL").length,
+    WARNING: attentionIssues.filter((i) => i.severity === "WARNING").length,
+    INFO: attentionIssues.filter((i) => i.severity === "INFO").length,
   };
 
   const avgContentScore = auditPages.length > 0
     ? Math.round(auditPages.reduce((s, p) => s + p.contentScore, 0) / auditPages.length)
     : null;
 
-  const orphanCount = auditPages.filter((p) => p.internalLinks === 0 && p.url !== "/").length;
-
   return (
     <div>
       <PageHeader
         eyebrow={site.domain}
         title="Site crawl"
-        description="Technical SEO audit · meta, headings, schema, sitemap, orphans, content score"
+        description="Weekly and post-deployment technical review against a verified full-site baseline"
         actions={<CrawlButton siteId={siteId} />}
       />
 
@@ -90,28 +96,44 @@ export default async function CrawlPage({ params }: Props) {
         <EmptyState
           icon="◎"
           title="No crawl yet"
-          description="Run a crawl to check titles, H1s, canonicals, broken pages, sitemap coverage, and on-page content scores."
+          description="Run a full crawl, review the findings, and establish the first verified baseline."
         />
       ) : (
         <div className="space-y-6">
+          <div className="rounded-xl border border-border bg-muted/20 px-5 py-4">
+            <p className="text-sm font-semibold text-foreground">
+              {site.crawlBaselineVerifiedAt
+                ? `Verified baseline · ${site.crawlBaselineVerifiedAt.toLocaleString()}`
+                : "Baseline not verified"}
+            </p>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              The health score is informational while audit rules are calibrated. Only a new,
+              actionable finding repeated across two post-baseline crawls enters the attention
+              list or BlueStreamFly admin queue.
+            </p>
+          </div>
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
             <ScoreCard
-              label="Health"
+              label="Health*"
               value={`${latest.healthScore ?? "—"}`}
-              hint="/100"
+              hint="informational"
               tone={(latest.healthScore ?? 0) >= 80 ? "good" : (latest.healthScore ?? 0) >= 60 ? "mid" : "bad"}
             />
             <ScoreCard label="Pages" value={String(latest.pagesFound)} hint="crawled" />
-            <ScoreCard label="Issues" value={String(realIssues.length)} hint={`${bySeverity.CRITICAL} critical`} />
+            <ScoreCard
+              label="New verified"
+              value={String(latest.verifiedIssuesFound)}
+              hint={`${bySeverity.CRITICAL} critical`}
+            />
             <ScoreCard
               label="Content avg"
               value={String(avgContentScore ?? "—")}
               hint="/100"
             />
             <ScoreCard
-              label="Orphans"
-              value={String(orphanCount)}
-              hint="no inlinks"
+              label="Reference"
+              value={String(referenceIssueCount)}
+              hint="baseline / unconfirmed"
             />
           </div>
 
@@ -189,20 +211,23 @@ export default async function CrawlPage({ params }: Props) {
             </div>
           )}
 
-          {/* Issues list with remediation */}
+          {/* Only verified, baseline-relative findings receive attention. */}
           <div className="panel overflow-hidden">
             <div className="border-b border-border/60 px-5 py-4">
-              <h3 className="font-heading text-lg font-semibold">Issues</h3>
+              <h3 className="font-heading text-lg font-semibold">New verified issues</h3>
               <p className="text-sm text-muted-foreground">
                 Critical {bySeverity.CRITICAL} · Warning {bySeverity.WARNING} · Info{" "}
-                {bySeverity.INFO}
+                {bySeverity.INFO} · {referenceIssueCount} reference findings hidden
               </p>
             </div>
-            {realIssues.length === 0 ? (
-              <p className="px-5 py-8 text-sm text-muted-foreground">No issues found</p>
+            {attentionIssues.length === 0 ? (
+              <p className="px-5 py-8 text-sm text-muted-foreground">
+                No new verified actionable issues. Known baseline, informational, heuristic,
+                and first-seen findings remain out of the action queue.
+              </p>
             ) : (
               <ul className="divide-y divide-border/40">
-                {realIssues.slice(0, 100).map((issue) => {
+                {attentionIssues.slice(0, 100).map((issue) => {
                   const details = issue.details as { howToFix?: string; kind?: string } | null;
                   return (
                     <li key={issue.id} className="px-5 py-3">
