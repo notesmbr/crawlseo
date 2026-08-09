@@ -3,6 +3,9 @@ import {
   classifyCrawlIssues,
   countImagesMissingAlt,
   crawlIssueFingerprint,
+  decodeHtmlEntities,
+  indexablePagesOnly,
+  indexableUrlsMissingFromSitemap,
   sitemapQueueUrls,
   type CrawlIssueLike,
 } from "../lib/crawler/policy.ts";
@@ -17,6 +20,25 @@ assert.deepEqual(imageAudit, { imageCount: 3, imagesMissingAlt: 1 });
 const sitemapUrls = Array.from({ length: 750 }, (_, index) => `https://example.com/${index}`);
 assert.equal(sitemapQueueUrls(sitemapUrls, 1_000).length, 750);
 assert.equal(sitemapQueueUrls(sitemapUrls, 200).length, 200);
+
+assert.equal(
+  decodeHtmlEntities("/app/open/river?river_id=pine&amp;source=web&#x5F;river"),
+  "/app/open/river?river_id=pine&source=web_river",
+);
+
+const indexabilityPages = [
+  { url: "https://example.com/", indexable: true },
+  { url: "https://example.com/private", indexable: false },
+  { url: "https://example.com/new", indexable: true },
+];
+assert.deepEqual(indexablePagesOnly(indexabilityPages), [
+  indexabilityPages[0],
+  indexabilityPages[2],
+]);
+assert.deepEqual(
+  indexableUrlsMissingFromSitemap(indexabilityPages, ["https://example.com/"]),
+  ["https://example.com/new"],
+);
 
 const missingTitle: CrawlIssueLike = {
   url: "https://example.com/new-page/",

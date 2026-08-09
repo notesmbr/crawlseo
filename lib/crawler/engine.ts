@@ -6,6 +6,9 @@ import robotsParser from "robots-parser";
 import {
   classifyCrawlIssues,
   countImagesMissingAlt,
+  decodeHtmlEntities,
+  indexablePagesOnly,
+  indexableUrlsMissingFromSitemap,
   sitemapQueueUrls,
 } from "./policy";
 import { REMEDIATION } from "./remediation";
@@ -150,15 +153,6 @@ function extractTag(html: string, re: RegExp): string | null {
   return m?.[1]?.trim() || null;
 }
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-}
-
 function stripTags(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -188,7 +182,7 @@ function parseHtml(
 ): PageSnapshot {
   const titleRaw = extractTag(html, /<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleRaw
-    ? decodeEntities(titleRaw.replace(/\s+/g, " ").trim())
+    ? decodeHtmlEntities(titleRaw.replace(/\s+/g, " ").trim())
     : null;
 
   const description =
@@ -202,7 +196,7 @@ function parseHtml(
     );
 
   const h1s = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)].map((m) =>
-    decodeEntities(stripTags(m[1])).slice(0, 200)
+    decodeHtmlEntities(stripTags(m[1])).slice(0, 200)
   );
 
   const canonical =
@@ -274,10 +268,10 @@ function parseHtml(
     const hrefMatch = attrs.match(/href=["']([^"'#][^"']*)["']/i);
     if (!hrefMatch) continue;
 
-    const abs = normalizeUrl(hrefMatch[1], url);
+    const abs = normalizeUrl(decodeHtmlEntities(hrefMatch[1]), url);
     if (!abs) continue;
 
-    const anchorText = decodeEntities(stripTags(anchorContent)).slice(0, 200) || null;
+    const anchorText = decodeHtmlEntities(stripTags(anchorContent)).slice(0, 200) || null;
     const isNofollow = /\brel=["'][^"']*nofollow[^"']*["']/i.test(attrs);
     const isInternal = sameHost(abs, seedUrl);
 
@@ -538,7 +532,7 @@ function issuesFromPage(page: PageSnapshot): IssueInput[] {
     });
   }
 
-  if (!page.canonical) {
+  if (page.indexable && !page.canonical) {
     issues.push({
       url,
       type: "MISSING_CANONICAL",
@@ -853,7 +847,7 @@ async function executeCrawl(
   /* ---- Duplicate titles / descriptions ---- */
   const byTitle = new Map<string, string[]>();
   const byDesc = new Map<string, string[]>();
-  for (const p of pages) {
+  for (const p of indexablePagesOnly(pages)) {
     if (p.title) {
       const list = byTitle.get(p.title) || [];
       list.push(p.url);
@@ -901,11 +895,7 @@ async function executeCrawl(
   }
 
   /* ---- Sitemap coverage & orphan detection ---- */
-  const crawledSet = new Set(pages.map((p) => p.url));
-  const sitemapSet = new Set(sitemapUrls);
-  const missingFromSitemap = [...crawledSet].filter(
-    (u) => sitemapSet.size > 0 && !sitemapSet.has(u)
-  );
+  const missingFromSitemap = indexableUrlsMissingFromSitemap(pages, sitemapUrls);
 
   const inlinkCount = new Map<string, number>();
   for (const p of pages) {
@@ -913,7 +903,7 @@ async function executeCrawl(
       inlinkCount.set(out, (inlinkCount.get(out) || 0) + 1);
     }
   }
-  const orphans = pages.filter((p) => {
+  const orphans = indexablePagesOnly(pages).filter((p) => {
     const isHome = new URL(p.url).pathname === "/" || p.url === seedUrl;
     return !isHome && (inlinkCount.get(p.url) || 0) === 0;
   });
