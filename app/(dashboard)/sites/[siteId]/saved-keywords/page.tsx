@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SaveKeywordForm, DeleteKeywordButton } from "@/components/sites/saved-keyword-actions";
 import { PositionBadge, NumCell, CtrCell } from "@/components/ui/data-table";
 import { getDateRange } from "@/lib/date-utils";
+import { rollupKeywordMetrics } from "@/lib/keyword-storage";
 
 interface Props {
   params: Promise<{ siteId: string }>;
@@ -32,25 +33,33 @@ export default async function SavedKeywordsPage({ params }: Props) {
   const endDate = new Date(`${end}T23:59:59.999Z`);
 
   const keywordData = saved.length > 0
-    ? await db.keyword.groupBy({
-        by: ["query"],
+    ? await db.keyword.findMany({
         where: {
           siteId,
           query: { in: saved.map((s) => s.query) },
+          page: { in: saved.map((s) => s.ownerPage) },
           date: { gte: startDate, lte: endDate },
         },
-        _sum: { clicks: true, impressions: true },
-        _avg: { position: true, ctr: true },
+        select: {
+          query: true,
+          page: true,
+          clicks: true,
+          impressions: true,
+          position: true,
+        },
       })
     : [];
 
   const dataMap = new Map(
-    keywordData.map((k) => [k.query, {
-      clicks: k._sum.clicks ?? 0,
-      impressions: k._sum.impressions ?? 0,
-      position: k._avg.position ?? 0,
-      ctr: k._avg.ctr ?? 0,
-    }])
+    saved.map((owner) => {
+      const rows = keywordData.filter(
+        (row) => row.query === owner.query && row.page === owner.ownerPage,
+      );
+      return [
+        `${owner.query}\u0000${owner.ownerPage}`,
+        rows.length > 0 ? rollupKeywordMetrics(rows) : null,
+      ] as const;
+    }),
   );
 
   return (
@@ -78,7 +87,7 @@ export default async function SavedKeywordsPage({ params }: Props) {
                     Keyword
                   </th>
                   <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                    Notes
+                    Owner and intent
                   </th>
                   <th className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                     Position
@@ -99,14 +108,17 @@ export default async function SavedKeywordsPage({ params }: Props) {
               </thead>
               <tbody className="divide-y divide-border/50">
                 {saved.map((kw) => {
-                  const data = dataMap.get(kw.query);
+                  const data = dataMap.get(`${kw.query}\u0000${kw.ownerPage}`);
                   return (
                     <tr key={kw.id} className="transition-colors hover:bg-muted/25">
                       <td className="px-4 py-3 font-medium text-foreground">
                         {kw.query}
                       </td>
-                      <td className="max-w-xs truncate px-4 py-3 text-muted-foreground">
-                        {kw.notes || "—"}
+                      <td className="max-w-md px-4 py-3 text-muted-foreground">
+                        <a className="block truncate text-primary hover:underline" href={kw.ownerPage}>
+                          {kw.ownerPage}
+                        </a>
+                        <span className="block truncate text-xs">{kw.intent || kw.notes || "—"}</span>
                       </td>
                       <td className="px-4 py-3 text-right">
                         {data ? <PositionBadge position={data.position} /> : "—"}
@@ -121,7 +133,11 @@ export default async function SavedKeywordsPage({ params }: Props) {
                         {data ? <CtrCell ctr={data.ctr} /> : "—"}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <DeleteKeywordButton siteId={siteId} query={kw.query} />
+                        <DeleteKeywordButton
+                          siteId={siteId}
+                          query={kw.query}
+                          ownerPage={kw.ownerPage}
+                        />
                       </td>
                     </tr>
                   );

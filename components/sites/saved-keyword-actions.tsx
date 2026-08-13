@@ -9,6 +9,8 @@ export function SaveKeywordForm({ siteId }: { siteId: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [ownerPage, setOwnerPage] = useState("");
+  const [intent, setIntent] = useState("");
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -20,10 +22,19 @@ export function SaveKeywordForm({ siteId }: { siteId: string }) {
       const res = await fetch(`/api/sites/${siteId}/saved-keywords`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: query.trim(), notes: notes.trim() || undefined }),
+        body: JSON.stringify({
+          query: query.trim(),
+          ownerPage: ownerPage.trim(),
+          intent: intent.trim() || undefined,
+          reviewedAt: new Date().toISOString(),
+          status: "active",
+          notes: notes.trim() || undefined,
+        }),
       });
       if (!res.ok) throw new Error("Failed to save keyword");
       setQuery("");
+      setOwnerPage("");
+      setIntent("");
       setNotes("");
       setOpen(false);
       router.refresh();
@@ -57,6 +68,27 @@ export function SaveKeywordForm({ siteId }: { siteId: string }) {
         />
       </div>
       <div>
+        <label className="mb-1 block text-[11px] text-muted-foreground">Owner page</label>
+        <input
+          type="url"
+          value={ownerPage}
+          onChange={(e) => setOwnerPage(e.target.value)}
+          placeholder="https://example.com/canonical-page"
+          className="h-8 w-72 rounded-lg border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+          required
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-[11px] text-muted-foreground">Intent</label>
+        <input
+          type="text"
+          value={intent}
+          onChange={(e) => setIntent(e.target.value)}
+          placeholder="What the searcher needs"
+          className="h-8 rounded-lg border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+        />
+      </div>
+      <div>
         <label className="mb-1 block text-[11px] text-muted-foreground">Notes (optional)</label>
         <input
           type="text"
@@ -66,7 +98,7 @@ export function SaveKeywordForm({ siteId }: { siteId: string }) {
           className="h-8 rounded-lg border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
         />
       </div>
-      <Button size="sm" type="submit" disabled={loading || !query.trim()}>
+      <Button size="sm" type="submit" disabled={loading || !query.trim() || !ownerPage.trim()}>
         {loading ? "Saving..." : "Save"}
       </Button>
       <Button size="sm" variant="ghost" type="button" onClick={() => setOpen(false)}>
@@ -76,7 +108,15 @@ export function SaveKeywordForm({ siteId }: { siteId: string }) {
   );
 }
 
-export function DeleteKeywordButton({ siteId, query }: { siteId: string; query: string }) {
+export function DeleteKeywordButton({
+  siteId,
+  query,
+  ownerPage,
+}: {
+  siteId: string;
+  query: string;
+  ownerPage: string;
+}) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
@@ -86,7 +126,7 @@ export function DeleteKeywordButton({ siteId, query }: { siteId: string; query: 
       await fetch(`/api/sites/${siteId}/saved-keywords`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, ownerPage }),
       });
       router.refresh();
     } catch (err) {

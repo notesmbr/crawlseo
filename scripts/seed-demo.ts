@@ -261,7 +261,12 @@ async function seed() {
   ];
   for (const sk of savedQueries) {
     await db.savedKeyword.create({
-      data: { siteId: site.id, query: sk.q, notes: sk.notes },
+      data: {
+        siteId: site.id,
+        query: sk.q,
+        ownerPage: `https://${site.domain}/`,
+        notes: sk.notes,
+      },
     });
   }
   console.log(`Created ${savedQueries.length} saved keywords`);

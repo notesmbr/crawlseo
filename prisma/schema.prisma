@@ -113,15 +113,17 @@ model Keyword {
   impressions Int      @default(0)
   ctr         Float    @default(0)
   position    Float    @default(0)
-  page        String?  // Landing page URL
-  device      String?  // DESKTOP, MOBILE, TABLET
-  country     String?  // Country code
+  page        String // Landing page URL
+  device      String // DESKTOP, MOBILE, TABLET
+  country     String // ISO 3166-1 alpha-3 country code from GSC
 
   site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  @@unique([siteId, query, date])
+  // A query can reach several pages on several device/country slices per day.
+  @@unique([siteId, query, date, page, device, country])
   @@index([siteId, date])
   @@index([siteId, query, date])
+  @@index([siteId, page, date])
 }
 
 model Page {
@@ -144,16 +146,22 @@ model Page {
 // ============ SAVED KEYWORDS ============
 
 model SavedKeyword {
-  id        String   @id @default(cuid())
-  siteId    String
-  query     String
-  notes     String?
-  createdAt DateTime @default(now())
+  id         String    @id @default(cuid())
+  siteId     String
+  query      String
+  ownerPage  String
+  intent     String?
+  reviewedAt DateTime?
+  status     String    @default("active")
+  notes      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   @@unique([siteId, query])
   @@index([siteId])
+  @@index([siteId, ownerPage])
 }
 
 // ============ RANK TRACKING ============
@@ -165,14 +173,15 @@ model RankSnapshot {
   position    Float
   clicks      Int      @default(0)
   impressions Int      @default(0)
-  page        String?
+  page        String   @default("")
   date        DateTime
 
   site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  @@unique([siteId, query, date])
+  @@unique([siteId, query, page, date])
   @@index([siteId, date])
   @@index([siteId, query, date])
+  @@index([siteId, page, date])
 }
 
 // ============ CRAWLER ============

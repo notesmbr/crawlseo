@@ -25,6 +25,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:bsf-crawl-policy": "node --experimental-strip-types scripts/test-bsf-crawl-policy.mts",
+    "test:keyword-storage": "node --experimental-strip-types scripts/test-keyword-storage.mts",
+    "test:saved-keyword-ownership": "node --experimental-strip-types scripts/test-saved-keyword-ownership.mts",
     "mcp": "npx tsx mcp/server.ts",
     "seed:demo": "npx tsx scripts/seed-demo.ts",
     "seed:demo:clean": "npx tsx scripts/seed-demo.ts --clean"

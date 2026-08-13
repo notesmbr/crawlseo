@@ -6,6 +6,7 @@ import {
   decodeHtmlEntities,
   indexablePagesOnly,
   indexableUrlsMissingFromSitemap,
+  shouldEnqueueCrawlUrl,
   sitemapQueueUrls,
   type CrawlIssueLike,
 } from "../lib/crawler/policy.ts";
@@ -20,6 +21,36 @@ assert.deepEqual(imageAudit, { imageCount: 3, imagesMissingAlt: 1 });
 const sitemapUrls = Array.from({ length: 750 }, (_, index) => `https://example.com/${index}`);
 assert.equal(sitemapQueueUrls(sitemapUrls, 1_000).length, 750);
 assert.equal(sitemapQueueUrls(sitemapUrls, 200).length, 200);
+
+const canonicalSet = new Set([
+  "https://example.com/",
+  "https://example.com/river",
+]);
+assert.equal(
+  shouldEnqueueCrawlUrl("https://example.com/river", {
+    sitemapOnly: true,
+    allowedUrls: canonicalSet,
+  }),
+  true,
+);
+assert.equal(
+  shouldEnqueueCrawlUrl("https://example.com/river?source=widget", {
+    sitemapOnly: true,
+    allowedUrls: canonicalSet,
+  }),
+  false,
+);
+assert.equal(
+  shouldEnqueueCrawlUrl("https://example.com/private", {
+    sitemapOnly: true,
+    allowedUrls: canonicalSet,
+  }),
+  false,
+);
+assert.equal(
+  shouldEnqueueCrawlUrl("https://example.com/private", { sitemapOnly: false }),
+  true,
+);
 
 assert.equal(
   decodeHtmlEntities("/app/open/river?river_id=pine&amp;source=web&#x5F;river"),

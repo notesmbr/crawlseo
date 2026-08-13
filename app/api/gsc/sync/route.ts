@@ -6,6 +6,7 @@ import {
   ReauthRequiredError,
 } from "@/lib/google";
 import { getDateRange } from "@/lib/date-utils";
+import { replaceKeywordRows } from "@/lib/keyword-storage";
 
 export async function POST(req: Request) {
   try {
@@ -51,36 +52,12 @@ export async function POST(req: Request) {
       fetchPageAnalytics(session.user.id, site.gscProperty, start, end),
     ]);
 
-    // Insert/update keywords
-    for (const keyword of keywords) {
-      await db.keyword.upsert({
-        where: {
-          siteId_query_date: {
-            siteId,
-            query: keyword.query,
-            date: new Date(keyword.date),
-          },
-        },
-        create: {
-          siteId,
-          query: keyword.query,
-          date: new Date(keyword.date),
-          clicks: keyword.clicks,
-          impressions: keyword.impressions,
-          ctr: keyword.ctr,
-          position: keyword.position,
-          page: keyword.page,
-          device: keyword.device,
-          country: keyword.country,
-        },
-        update: {
-          clicks: keyword.clicks,
-          impressions: keyword.impressions,
-          ctr: keyword.ctr,
-          position: keyword.position,
-        },
-      });
-    }
+    const keywordsInserted = await replaceKeywordRows(
+      siteId,
+      start,
+      end,
+      keywords,
+    );
 
     // Insert/update pages
     for (const page of pages) {
@@ -114,7 +91,8 @@ export async function POST(req: Request) {
 
     return Response.json({
       success: true,
-      keywordsInserted: keywords.length,
+      keywordsFetched: keywords.length,
+      keywordsInserted,
       pagesInserted: pages.length,
     });
   } catch (error) {

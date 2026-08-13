@@ -22,6 +22,7 @@ export async function GET(
 
     const url = new URL(req.url);
     const query = url.searchParams.get("query");
+    const page = url.searchParams.get("page");
     const days = parseInt(url.searchParams.get("days") || "90", 10);
 
     if (!query) {
@@ -41,6 +42,7 @@ export async function GET(
         where: {
           siteId,
           query,
+          ...(page ? { page } : {}),
           date: { gte: startDate },
         },
         select: {
@@ -55,6 +57,7 @@ export async function GET(
         where: {
           siteId,
           query,
+          ...(page ? { page } : {}),
           date: { gte: startDate },
         },
         select: {

@@ -41,7 +41,12 @@ function normalizedDomain(value: string) {
 export async function POST(request: Request) {
   if (!validAutomationToken(request)) return unauthorized();
 
-  let body: { domain?: string; mode?: RunMode; maxPages?: number };
+  let body: {
+    domain?: string;
+    mode?: RunMode;
+    maxPages?: number;
+    sitemapOnly?: boolean;
+  };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -78,7 +83,9 @@ export async function POST(request: Request) {
   });
 
   try {
-    const result = await runSiteCrawl(site.id, site.domain, maxPages, crawl.id);
+    const result = await runSiteCrawl(site.id, site.domain, maxPages, crawl.id, {
+      sitemapOnly: body.sitemapOnly ?? false,
+    });
     let baselineVerifiedAt: string | null = null;
 
     if (mode === "baseline") {

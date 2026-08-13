@@ -9,6 +9,7 @@ import {
   decodeHtmlEntities,
   indexablePagesOnly,
   indexableUrlsMissingFromSitemap,
+  shouldEnqueueCrawlUrl,
   sitemapQueueUrls,
 } from "./policy";
 import { REMEDIATION } from "./remediation";
@@ -603,6 +604,11 @@ export type CrawlResult = {
   missingFromSitemap: number;
   orphanCandidates: number;
   avgContentScore: number;
+  crawlScope: "sitemap_only" | "discovery";
+};
+
+export type CrawlOptions = {
+  sitemapOnly?: boolean;
 };
 
 /* ------------------------------------------------------------------ */
@@ -617,7 +623,8 @@ export async function runSiteCrawl(
   siteId: string,
   domain: string,
   maxPages: number = DEFAULT_MAX_PAGES,
-  existingCrawlId?: string
+  existingCrawlId?: string,
+  options: CrawlOptions = {},
 ): Promise<CrawlResult> {
   const effectiveMax = Math.max(1, Math.min(maxPages, ABSOLUTE_MAX_PAGES));
   const seed = domain.startsWith("http") ? domain : `https://${domain}`;
@@ -639,7 +646,14 @@ export async function runSiteCrawl(
       });
 
   try {
-    return await executeCrawl(crawl.id, siteId, seedUrl, origin, effectiveMax);
+    return await executeCrawl(
+      crawl.id,
+      siteId,
+      seedUrl,
+      origin,
+      effectiveMax,
+      options,
+    );
   } catch (err) {
     // Mark crawl as failed on any unhandled error
     await db.crawl
@@ -660,7 +674,8 @@ async function executeCrawl(
   siteId: string,
   seedUrl: string,
   origin: string,
-  maxPages: number
+  maxPages: number,
+  options: CrawlOptions,
 ): Promise<CrawlResult> {
   const issues: IssueInput[] = [];
   const pages: PageSnapshot[] = [];
@@ -730,6 +745,7 @@ async function executeCrawl(
       if (!queue.includes(u)) queue.push(u);
     }
   }
+  const sitemapSet = new Set(sitemapUrls);
 
   /* ---- Crawl loop with batch concurrency ---- */
   while (queue.length > 0 && pages.length < maxPages) {
@@ -832,7 +848,13 @@ async function executeCrawl(
 
       // Enqueue discovered internal links
       for (const link of page.internalOutlinks) {
-        if (!visited.has(link)) {
+        if (
+          !visited.has(link) &&
+          shouldEnqueueCrawlUrl(link, {
+            sitemapOnly: options.sitemapOnly,
+            allowedUrls: sitemapSet,
+          })
+        ) {
           queue.push(link);
         }
       }
@@ -1150,5 +1172,6 @@ async function executeCrawl(
     missingFromSitemap: missingFromSitemap.length,
     orphanCandidates: orphans.length,
     avgContentScore,
+    crawlScope: options.sitemapOnly ? "sitemap_only" : "discovery",
   };
 }

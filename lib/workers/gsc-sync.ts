@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { fetchSearchAnalytics, fetchPageAnalytics } from "@/lib/google";
+import { replaceKeywordRows } from "@/lib/keyword-storage";
 import { getDateRange } from "@/lib/date-utils";
 
 interface SyncResult {
@@ -61,49 +62,14 @@ export async function syncGSCDataForSite(
       `[GSC Sync] Fetched ${keywords.length} keyword records and ${pages.length} page records`
     );
 
-    // Insert/update keywords with upsert
-    let keywordsInserted = 0;
-    for (const keyword of keywords) {
-      try {
-        const date = new Date(keyword.date);
-        date.setHours(0, 0, 0, 0); // Normalize to start of day
-
-        await db.keyword.upsert({
-          where: {
-            siteId_query_date: {
-              siteId,
-              query: keyword.query,
-              date,
-            },
-          },
-          create: {
-            siteId,
-            query: keyword.query,
-            date,
-            clicks: keyword.clicks,
-            impressions: keyword.impressions,
-            ctr: keyword.ctr,
-            position: keyword.position,
-            page: keyword.page,
-            device: keyword.device,
-            country: keyword.country,
-          },
-          update: {
-            clicks: keyword.clicks,
-            impressions: keyword.impressions,
-            ctr: keyword.ctr,
-            position: keyword.position,
-            page: keyword.page,
-            device: keyword.device,
-            country: keyword.country,
-          },
-        });
-
-        keywordsInserted++;
-      } catch (error) {
-        console.warn(`[GSC Sync] Failed to upsert keyword: ${keyword.query}`, error);
-      }
-    }
+    // Replace the requested window atomically so stale source-grain rows do not
+    // survive a re-sync and every page/device/country slice is preserved.
+    const keywordsInserted = await replaceKeywordRows(
+      siteId,
+      start,
+      end,
+      keywords,
+    );
 
     // Insert/update pages
     let pagesInserted = 0;

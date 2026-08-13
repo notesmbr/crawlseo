@@ -21,6 +21,11 @@ export type IndexabilityPage = {
   indexable: boolean;
 };
 
+export type SitemapOnlyPolicy = {
+  sitemapOnly?: boolean;
+  allowedUrls?: ReadonlySet<string>;
+};
+
 const ACTIONABLE_WARNING_TYPES = new Set([
   "DUPLICATE_TITLE",
   "LARGE_PAGE",
@@ -45,6 +50,14 @@ export function countImagesMissingAlt(html: string) {
 
 export function sitemapQueueUrls(urls: string[], maxPages: number) {
   return urls.slice(0, Math.max(0, maxPages));
+}
+
+export function shouldEnqueueCrawlUrl(
+  url: string,
+  policy: SitemapOnlyPolicy,
+) {
+  if (!policy.sitemapOnly) return true;
+  return policy.allowedUrls?.has(url) ?? false;
 }
 
 function decodeNumericEntity(match: string, code: string, radix: number) {
