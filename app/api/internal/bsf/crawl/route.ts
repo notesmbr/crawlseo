@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
 import { runSiteCrawl } from "@/lib/crawler/engine";
+import { sitemapOnlyForDomain } from "@/lib/crawler/policy";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
@@ -84,7 +85,7 @@ export async function POST(request: Request) {
 
   try {
     const result = await runSiteCrawl(site.id, site.domain, maxPages, crawl.id, {
-      sitemapOnly: body.sitemapOnly ?? false,
+      sitemapOnly: sitemapOnlyForDomain(site.domain, body.sitemapOnly),
     });
     let baselineVerifiedAt: string | null = null;
 

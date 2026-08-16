@@ -77,6 +77,7 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
           ["Keywords", "keywords"],
           ["Saved Keywords", "saved-keywords"],
           ["Pages", "pages"],
+          ["Page Reviews", "page-reviews"],
           ["Crawl", "crawl"],
           ["Vitals", "vitals"],
           ["Alerts", "alerts"],

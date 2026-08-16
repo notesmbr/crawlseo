@@ -26,6 +26,16 @@ export type SitemapOnlyPolicy = {
   allowedUrls?: ReadonlySet<string>;
 };
 
+export function sitemapOnlyForDomain(domain: string, requested = false) {
+  try {
+    const value = domain.startsWith("http") ? domain : `https://${domain}`;
+    const hostname = new URL(value).hostname.replace(/^www\./, "").toLowerCase();
+    return hostname === "bluestreamfly.com" ? true : requested;
+  } catch {
+    return requested;
+  }
+}
+
 const ACTIONABLE_WARNING_TYPES = new Set([
   "DUPLICATE_TITLE",
   "LARGE_PAGE",

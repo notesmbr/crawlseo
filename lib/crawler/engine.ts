@@ -9,6 +9,7 @@ import {
   decodeHtmlEntities,
   indexablePagesOnly,
   indexableUrlsMissingFromSitemap,
+  sitemapOnlyForDomain,
   shouldEnqueueCrawlUrl,
   sitemapQueueUrls,
 } from "./policy";
@@ -630,6 +631,10 @@ export async function runSiteCrawl(
   const seed = domain.startsWith("http") ? domain : `https://${domain}`;
   const seedUrl = normalizeUrl(seed, seed) || seed;
   const origin = originOf(seedUrl);
+  const effectiveOptions: CrawlOptions = {
+    ...options,
+    sitemapOnly: sitemapOnlyForDomain(domain, options.sitemapOnly),
+  };
 
   const crawl = existingCrawlId
     ? await db.crawl.update({
@@ -652,7 +657,7 @@ export async function runSiteCrawl(
       seedUrl,
       origin,
       effectiveMax,
-      options,
+      effectiveOptions,
     );
   } catch (err) {
     // Mark crawl as failed on any unhandled error

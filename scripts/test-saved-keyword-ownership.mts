@@ -16,6 +16,24 @@ assert.equal(
   ),
   "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
 );
+assert.equal(
+  normalizeOwnerPage(
+    "https://www.bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+    "bluestreamfly.com",
+  ),
+  "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+  "www input canonicalizes to the configured bare host",
+);
+assert.equal(
+  normalizeOwnerPage("https://bluestreamfly.com/page", "www.bluestreamfly.com"),
+  "https://www.bluestreamfly.com/page",
+  "bare input canonicalizes to the configured www host",
+);
+assert.equal(
+  normalizeOwnerPage("https://bluestreamfly.com:443/page", "bluestreamfly.com"),
+  "https://bluestreamfly.com/page",
+  "the standard HTTPS port canonicalizes away",
+);
 assert.throws(
   () => normalizeOwnerPage("https://bluestreamfly.com/page?preview=1"),
   /canonical URL/,
@@ -23,6 +41,22 @@ assert.throws(
 assert.throws(
   () => normalizeOwnerPage("https://example.com/page", "bluestreamfly.com"),
   /must belong/,
+);
+assert.throws(
+  () =>
+    normalizeOwnerPage(
+      "https://user:secret@bluestreamfly.com/page",
+      "bluestreamfly.com",
+    ),
+  /credentials/,
+);
+assert.throws(
+  () =>
+    normalizeOwnerPage(
+      "https://bluestreamfly.com:8443/page",
+      "bluestreamfly.com",
+    ),
+  /standard HTTPS port/,
 );
 
 const [schema, userRoute, internalRoute, invariantMigration] = await Promise.all([

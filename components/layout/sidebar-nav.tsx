@@ -17,6 +17,7 @@ import {
   Bot,
   Link as LinkIcon,
   SearchCheck,
+  ClipboardCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -60,6 +61,7 @@ export function SidebarNav({
           { href: `/sites/${activeSiteId}/keywords`, label: "Keywords", icon: Search },
           { href: `/sites/${activeSiteId}/saved-keywords`, label: "Saved Keywords", icon: Bookmark },
           { href: `/sites/${activeSiteId}/pages`, label: "Pages", icon: FileText },
+          { href: `/sites/${activeSiteId}/page-reviews`, label: "Page Reviews", icon: ClipboardCheck },
           { href: `/sites/${activeSiteId}/crawl`, label: "Crawl / Audit", icon: Bug },
           { href: `/sites/${activeSiteId}/vitals`, label: "Vitals", icon: Gauge },
           { href: `/sites/${activeSiteId}/opportunities`, label: "Opportunities", icon: Lightbulb },

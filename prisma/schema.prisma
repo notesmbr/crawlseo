@@ -98,8 +98,333 @@ model Site {
   alerts        Alert[]
   savedKeywords SavedKeyword[]
   rankSnapshots RankSnapshot[]
+  pageReviews PageReview[]
+  pageReviewRevisions PageReviewRevision[]
 
   @@unique([userId, domain])
+}
+
+// ============ MANUAL PAGE REVIEWS ============
+
+model PageReview {
+  id           String @id @default(cuid())
+  siteId       String
+  pageId       String
+  canonicalUrl String
+
+  pageFamily   PageFamily
+  indexPolicy  IndexPolicy
+  reviewStatus PageReviewStatus @default(UNREVIEWED)
+  priority     ReviewPriority   @default(NONE)
+
+  keywordOwnership           KeywordOwnershipStatus @default(UNDECIDED)
+  primaryKeyword             String?
+  primaryKeywordNormalized   String?
+  keywordOwnerCanonical      String?
+  keywordNotApplicableReason String?
+  secondaryKeywords          Json?
+
+  topicCluster     String?
+  parentPage       String?
+  clusterGaps      Json?
+  maintenanceOwner String?
+  editorialOwner   String?
+
+  searchIntent SearchIntent @default(UNKNOWN)
+  jobToBeDone  String?
+
+  keywordPlannerEvidenceState   EvidenceState @default(MISSING)
+  keywordPlannerEvidenceDetails Json?
+  googleTrendsEvidenceState     EvidenceState @default(MISSING)
+  googleTrendsEvidenceDetails   Json?
+  measurementPlanEvidenceState  EvidenceState @default(MISSING)
+  measurementPlanDetails        Json?
+
+  serpSnapshotAt         DateTime?
+  serpQuery              String?
+  serpLocale             String?
+  serpDevice             SerpDevice?
+  serpMethod             SerpReviewMethod?
+  serpCompetition        SerpCompetition @default(UNCLEAR)
+  serpEvidenceState      EvidenceState @default(MISSING)
+  serpEvidenceSummary    String?
+  serpFeatures           Json?
+  serpCompetitionSummary String?
+  serpResults            Json?
+
+  competitorOffer              String?
+  currentOffer                 String?
+  differentiation              String?
+  differentiationEvidenceState EvidenceState @default(MISSING)
+
+  eeatEvidence Json?
+  eeatGaps     Json?
+  eeatEvidenceDetails Json?
+  eeatEvidenceState EvidenceState @default(MISSING)
+
+  decisionState     PageDecisionState @default(PENDING)
+  decisionRationale String?
+  proposedChange    String?
+  performanceState  PagePerformanceState @default(UNASSESSED)
+  changeScope       PageChangeScope       @default(UNDECIDED)
+  scopeRationale    String?
+  demonstratedWins  Json?
+  preservedElements Json?
+  intentionallyChangedElements Json?
+  changeBlastRadius PageChangeBlastRadius @default(UNDECIDED)
+  affectedPageFamily PageFamily?
+  affectedCanonicalCount Int?
+  blastRadiusNote   String?
+  experimentState  PageExperimentState @default(UNCHECKED)
+  experimentId     String?
+  experimentFrozenUntil DateTime?
+  experimentExceptionReason String?
+  rollbackTrigger  String?
+  changeState       PageChangeState   @default(NOT_PLANNED)
+  changeId          String?
+  changedAt         DateTime?
+
+  day7State       ReviewGateState @default(NOT_DUE)
+  day7DueAt       DateTime?
+  day7ReviewedAt  DateTime?
+  day7Evidence    String?
+  day7Decision    String?
+  day7Rationale   String?
+  day7NextAction  String?
+  day28State      ReviewGateState @default(NOT_DUE)
+  day28DueAt      DateTime?
+  day28ReviewedAt DateTime?
+  day28Evidence   String?
+  day28Decision   String?
+  day28Rationale  String?
+  day28NextAction String?
+  day56State      ReviewGateState @default(NOT_DUE)
+  day56DueAt      DateTime?
+  day56ReviewedAt DateTime?
+  day56Evidence   String?
+  day56Decision   String?
+  day56Rationale  String?
+  day56NextAction String?
+
+  firstReviewedAt       DateTime?
+  lastReviewedAt        DateTime?
+  nextReviewAt          DateTime?
+  manualNotes           String?
+  manualChatState       ManualChatState @default(AWAITING_USER_SELECTION)
+  userDecisionReference String?
+
+  version   Int       @default(1)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  site      Site                 @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  revisions PageReviewRevision[]
+
+  // Current-record uniqueness is enforced with partial indexes in the migration
+  // so a soft-deleted review does not permanently reserve its URL or page ID.
+  @@index([siteId, canonicalUrl])
+  @@index([siteId, pageId])
+  @@index([siteId, reviewStatus, priority])
+  @@index([siteId, pageFamily])
+  @@index([siteId, topicCluster])
+  @@index([siteId, primaryKeywordNormalized])
+}
+
+model PageReviewRevision {
+  id              String               @id @default(cuid())
+  siteId          String
+  reviewId        String
+  version         Int
+  changeType      PageReviewChangeType
+  changedFields   Json
+  snapshot        Json
+  changeNote      String?
+  changedByUserId String
+  createdAt       DateTime             @default(now())
+
+  site   Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  review PageReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, version])
+  @@index([siteId, createdAt])
+}
+
+enum PageFamily {
+  HOME
+  REPORT_DIRECTORY
+  STATE_REPORT_HUB
+  RIVER_REPORT
+  ARTICLE_DIRECTORY
+  ARTICLE
+  FLY_DIRECTORY
+  FLY_FAMILY_GUIDE
+  FLY_PATTERN_GUIDE
+  WEEKLY_CONDITIONS_HUB
+  WIDGET_LANDING_PAGE
+  TRUST_COMPANY
+  TRUST_METHODOLOGY
+  LEGAL
+  SUPPORT
+  UTILITY
+  OTHER
+}
+
+enum IndexPolicy {
+  INDEX
+  NOINDEX
+  REDIRECT
+  REMOVE
+  UNDECIDED
+}
+
+enum PageReviewStatus {
+  UNREVIEWED
+  QUEUED
+  RESEARCHING
+  READY_NO_CHANGE
+  READY_TO_CHANGE
+  MONITORING
+  COMPLETE
+  BLOCKED
+}
+
+enum ReviewPriority {
+  NONE
+  P0
+  P1
+  P2
+  P3
+  P4
+}
+
+enum PagePerformanceState {
+  UNASSESSED
+  CRITICAL_DEFECT
+  NO_OR_NEAR_ZERO_VISIBILITY
+  IMPRESSIONS_WITHOUT_RESULT
+  EARLY_OPPORTUNITY
+  DEMONSTRATED_WINNER
+  INSUFFICIENT_OBSERVATION
+}
+
+enum PageChangeScope {
+  UNDECIDED
+  FOCUSED
+  COMPREHENSIVE
+  NOT_APPLICABLE
+}
+
+enum PageChangeBlastRadius {
+  UNDECIDED
+  PAGE_LOCAL
+  SHARED_TEMPLATE
+  MIXED
+  GLOBAL_NAVIGATION
+  SOURCE_SENSITIVE
+  NOT_APPLICABLE
+}
+
+enum PageExperimentState {
+  UNCHECKED
+  NONE
+  FROZEN
+  APPROVED_CONTAMINATION
+}
+
+enum KeywordOwnershipStatus {
+  THIS_PAGE
+  ANOTHER_CANONICAL
+  UNDECIDED
+  NOT_APPLICABLE
+}
+
+enum EvidenceState {
+  VERIFIED
+  PARTIAL
+  MISSING
+  NOT_APPLICABLE
+}
+
+enum ManualChatState {
+  AWAITING_USER_SELECTION
+  RESEARCHING
+  AWAITING_USER_DECISION
+  APPROVED_TO_RECORD
+  APPROVED_TO_IMPLEMENT
+  MONITORING
+  COMPLETE
+}
+
+enum SearchIntent {
+  UNKNOWN
+  INFORMATIONAL
+  LOCAL_TRIP_PLANNING
+  COMMERCIAL_INVESTIGATION
+  TRANSACTIONAL
+  NAVIGATIONAL
+  SAFETY_OR_RULES
+  MIXED
+  NOT_APPLICABLE
+}
+
+enum SerpDevice {
+  DESKTOP
+  MOBILE
+}
+
+enum SerpReviewMethod {
+  MANUAL_GOOGLE
+  MANUAL_OTHER
+}
+
+enum SerpCompetition {
+  LOW
+  MEDIUM
+  HIGH
+  UNCLEAR
+}
+
+enum PageDecisionState {
+  PENDING
+  NO_CHANGE
+  CHANGE_RECOMMENDED
+  INCONCLUSIVE
+  KEEP
+  EXPAND
+  REVISE
+  ITERATE
+  MERGE
+  REDIRECT
+  NOINDEX
+  RETIRE
+  ROLLBACK
+  BLOCKED
+}
+
+enum PageChangeState {
+  NOT_PLANNED
+  PLANNED
+  IN_PROGRESS
+  SHIPPED
+  VERIFIED
+  REVERTED
+}
+
+enum ReviewGateState {
+  NOT_DUE
+  DUE
+  RECORDED
+  MISSED
+  NOT_APPLICABLE
+}
+
+enum PageReviewChangeType {
+  CREATED
+  UPDATED
+  DELETED
+  RESTORED
+  SEEDED
 }
 
 // ============ GSC DATA ============

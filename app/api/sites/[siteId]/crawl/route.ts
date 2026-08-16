@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { runSiteCrawl } from "@/lib/crawler/engine";
+import { sitemapOnlyForDomain } from "@/lib/crawler/policy";
 
 export async function POST(
   req: Request,
@@ -35,10 +36,14 @@ export async function POST(
 
     // Accept optional maxPages from request body
     let maxPages: number | undefined;
+    let requestedSitemapOnly: boolean | undefined;
     try {
-      const body = (await req.json()) as { maxPages?: number };
+      const body = (await req.json()) as { maxPages?: number; sitemapOnly?: boolean };
       if (body.maxPages && typeof body.maxPages === "number" && body.maxPages > 0) {
         maxPages = body.maxPages;
+      }
+      if (typeof body.sitemapOnly === "boolean") {
+        requestedSitemapOnly = body.sitemapOnly;
       }
     } catch {
       // No body or invalid JSON — use defaults
@@ -54,7 +59,9 @@ export async function POST(
     });
 
     // Fire-and-forget: run crawl in background using the pre-created record
-    runSiteCrawl(siteId, site.domain, maxPages, crawl.id).catch((error) => {
+    runSiteCrawl(siteId, site.domain, maxPages, crawl.id, {
+      sitemapOnly: sitemapOnlyForDomain(site.domain, requestedSitemapOnly),
+    }).catch((error) => {
       console.error(`Background crawl failed for site ${siteId}:`, error);
     });
 

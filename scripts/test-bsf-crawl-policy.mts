@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   classifyCrawlIssues,
   countImagesMissingAlt,
@@ -7,9 +8,35 @@ import {
   indexablePagesOnly,
   indexableUrlsMissingFromSitemap,
   shouldEnqueueCrawlUrl,
+  sitemapOnlyForDomain,
   sitemapQueueUrls,
   type CrawlIssueLike,
 } from "../lib/crawler/policy.ts";
+
+assert.equal(sitemapOnlyForDomain("bluestreamfly.com"), true);
+assert.equal(sitemapOnlyForDomain("https://www.bluestreamfly.com", false), true);
+assert.equal(sitemapOnlyForDomain("BLUESTREAMFLY.COM", false), true);
+assert.equal(sitemapOnlyForDomain("example.com"), false);
+assert.equal(sitemapOnlyForDomain("example.com", true), true);
+
+const engineSource = fs.readFileSync(new URL("../lib/crawler/engine.ts", import.meta.url), "utf8");
+const internalRouteSource = fs.readFileSync(
+  new URL("../app/api/internal/bsf/crawl/route.ts", import.meta.url),
+  "utf8",
+);
+const siteRouteSource = fs.readFileSync(
+  new URL("../app/api/sites/[siteId]/crawl/route.ts", import.meta.url),
+  "utf8",
+);
+assert.match(engineSource, /sitemapOnly:\s*sitemapOnlyForDomain\(domain, options\.sitemapOnly\)/);
+assert.match(
+  internalRouteSource,
+  /sitemapOnly:\s*sitemapOnlyForDomain\(site\.domain, body\.sitemapOnly\)/,
+);
+assert.match(
+  siteRouteSource,
+  /sitemapOnly:\s*sitemapOnlyForDomain\(site\.domain, requestedSitemapOnly\)/,
+);
 
 const imageAudit = countImagesMissingAlt(`
   <img src="hero.jpg" alt="River at sunrise">
