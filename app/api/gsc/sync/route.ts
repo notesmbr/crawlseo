@@ -1,115 +1,61 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import {
-  fetchSearchAnalytics,
-  fetchPageAnalytics,
-  ReauthRequiredError,
-} from "@/lib/google";
-import { getDateRange } from "@/lib/date-utils";
-import { replaceKeywordRows } from "@/lib/keyword-storage";
+import { syncGSCDataForSite } from "@/lib/workers/gsc-sync";
 
-export async function POST(req: Request) {
+export async function POST(request: Request) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: { siteId?: unknown; daysBack?: unknown };
   try {
-    const session = await auth();
-
-    if (!session?.user?.id) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { siteId } = (await req.json()) as { siteId: string };
-
-    // Verify site belongs to user
-    const site = await db.site.findUnique({
-      where: { id: siteId },
-      select: { userId: true, gscProperty: true },
-    });
-
-    if (!site || site.userId !== session.user.id) {
-      return Response.json(
-        { error: "Site not found or unauthorized" },
-        { status: 404 }
-      );
-    }
-
-    if (!site.gscProperty) {
-      return Response.json(
-        { error: "Site does not have GSC property connected" },
-        { status: 400 }
-      );
-    }
-
-    // Fetch last 28 days of data
-    const { start, end } = getDateRange(28);
-
-    const [keywords, pages] = await Promise.all([
-      fetchSearchAnalytics(
-        session.user.id,
-        site.gscProperty,
-        start,
-        end,
-        ["query", "page", "date", "device", "country"]
-      ),
-      fetchPageAnalytics(session.user.id, site.gscProperty, start, end),
-    ]);
-
-    const keywordsInserted = await replaceKeywordRows(
-      siteId,
-      start,
-      end,
-      keywords,
-    );
-
-    // Insert/update pages
-    for (const page of pages) {
-      if (!page.page) continue;
-
-      await db.page.upsert({
-        where: {
-          siteId_url_date: {
-            siteId,
-            url: page.page,
-            date: new Date(page.date),
-          },
-        },
-        create: {
-          siteId,
-          url: page.page,
-          date: new Date(page.date),
-          clicks: page.clicks,
-          impressions: page.impressions,
-          ctr: page.ctr,
-          position: page.position,
-        },
-        update: {
-          clicks: page.clicks,
-          impressions: page.impressions,
-          ctr: page.ctr,
-          position: page.position,
-        },
-      });
-    }
-
-    return Response.json({
-      success: true,
-      keywordsFetched: keywords.length,
-      keywordsInserted,
-      pagesInserted: pages.length,
-    });
-  } catch (error) {
-    if (error instanceof ReauthRequiredError) {
-      return Response.json(
-        { error: error.message, code: "REAUTH_REQUIRED" },
-        { status: 401 }
-      );
-    }
-
-    console.error("Error syncing GSC data:", error);
-
+    body = (await request.json()) as typeof body;
+  } catch {
+    return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
+  if (typeof body.siteId !== "string" || !body.siteId.trim()) {
+    return Response.json({ error: "siteId is required." }, { status: 400 });
+  }
+  const daysBack = body.daysBack === undefined ? 28 : Number(body.daysBack);
+  if (!Number.isInteger(daysBack) || daysBack < 1 || daysBack > 90) {
     return Response.json(
-      {
-        error: error instanceof Error ? error.message : "Failed to sync GSC data",
-      },
-      { status: 500 }
+      { error: "daysBack must be a whole number from 1 to 90." },
+      { status: 400 },
     );
   }
+
+  const site = await db.site.findUnique({
+    where: { id: body.siteId },
+    select: { userId: true },
+  });
+  if (!site || site.userId !== session.user.id) {
+    return Response.json({ error: "Site not found or unauthorized" }, { status: 404 });
+  }
+
+  const result = await syncGSCDataForSite(
+    session.user.id,
+    body.siteId,
+    daysBack,
+  );
+  if (!result.success) {
+    return Response.json(
+      {
+        error: result.error ?? "Search Console synchronization failed.",
+        code: result.errorCode ?? "GSC_SYNC_FAILED",
+        runId: result.runId ?? null,
+      },
+      {
+        status:
+          result.errorCode === "REAUTH_REQUIRED"
+            ? 401
+            : result.errorCode === "GSC_NOT_CONNECTED"
+              ? 400
+              : 502,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
+  }
+
+  return Response.json(result, { headers: { "Cache-Control": "no-store" } });
 }

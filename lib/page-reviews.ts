@@ -1214,6 +1214,646 @@ const eeatSchema = z
     }
   });
 
+const httpUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((value) => ["http:", "https:"].includes(new URL(value).protocol), {
+    message: "Must use http:// or https://",
+  });
+
+const evidenceSourceSchema = z
+  .object({
+    label: shortText(300),
+    url: httpUrl,
+    checkedAt: dateTime,
+  })
+  .strict();
+
+const commonStructuredEvidenceShape = {
+  checkedAt: nullableDateTime.default(null),
+  reviewer: nullableText(300).default(null),
+  sources: z.array(evidenceSourceSchema).max(100).default([]),
+  finding: nullableText(8000).default(null),
+  limitation: nullableText(4000).default(null),
+  notApplicableReason: nullableText(4000).default(null),
+};
+
+const emptyCommonStructuredEvidence = {
+  checkedAt: null,
+  reviewer: null,
+  sources: [],
+  finding: null,
+  limitation: null,
+  notApplicableReason: null,
+};
+
+type StructuredEvidenceContext = z.RefinementCtx;
+
+function validateCommonStructuredEvidence(
+  value: {
+    evidenceState: (typeof evidenceStateValues)[number];
+    checkedAt: string | null;
+    reviewer: string | null;
+    sources: z.output<typeof evidenceSourceSchema>[];
+    finding: string | null;
+    limitation: string | null;
+    notApplicableReason: string | null;
+  },
+  context: StructuredEvidenceContext,
+  label: string,
+) {
+  if (value.evidenceState === "not_applicable") {
+    if (!value.notApplicableReason) {
+      context.addIssue({
+        code: "custom",
+        path: ["notApplicableReason"],
+        message: `${label} needs an honest not-applicable reason`,
+      });
+    }
+    return;
+  }
+
+  if (value.notApplicableReason) {
+    context.addIssue({
+      code: "custom",
+      path: ["notApplicableReason"],
+      message: `${label} can only use notApplicableReason when evidence is not applicable`,
+    });
+  }
+  if (!['verified', 'partial'].includes(value.evidenceState)) return;
+
+  for (const [field, present] of [
+    ["checkedAt", Boolean(value.checkedAt)],
+    ["reviewer", Boolean(value.reviewer)],
+    ["sources", value.sources.length > 0],
+    ["finding", Boolean(value.finding)],
+  ] as const) {
+    if (!present) {
+      context.addIssue({
+        code: "custom",
+        path: [field],
+        message: `${label}.${field} is required when evidence is verified or partial`,
+      });
+    }
+  }
+  if (
+    value.evidenceState === "partial" &&
+    (!value.limitation || value.limitation.length < 10)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["limitation"],
+      message: `${label} needs a clear limitation when evidence is partial`,
+    });
+  }
+}
+
+const structuredCheckStatusValues = ["pass", "issue", "not_checked"] as const;
+
+const mediaAssetSchema = z
+  .object({
+    placement: shortText(300),
+    assetUrl: shortText(2048),
+    sourceUrl: nullableText(2048).default(null),
+    subjectLocation: nullableText(1000).default(null),
+    creator: nullableText(500).default(null),
+    capturedAt: nullableText(300).default(null),
+    licenseOrPermission: nullableText(1000).default(null),
+    attribution: nullableText(2000).default(null),
+    altText: nullableText(2000).default(null),
+    caption: nullableText(2000).default(null),
+    accuracyStatus: z.enum(structuredCheckStatusValues).default("not_checked"),
+    relevanceStatus: z.enum(structuredCheckStatusValues).default("not_checked"),
+    desktopRenderStatus: z.enum(structuredCheckStatusValues).default("not_checked"),
+    mobileRenderStatus: z.enum(structuredCheckStatusValues).default("not_checked"),
+    limitation: nullableText(2000).default(null),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.sourceUrl) {
+      const parsed = httpUrl.safeParse(value.sourceUrl);
+      if (!parsed.success) {
+        context.addIssue({
+          code: "custom",
+          path: ["sourceUrl"],
+          message: "media sourceUrl must use http:// or https://",
+        });
+      }
+    }
+  });
+
+const emptyMediaAccuracyDetails = {
+  ...emptyCommonStructuredEvidence,
+  inventoryComplete: null,
+  assets: [],
+};
+
+const mediaAccuracyDetailsSchema = z
+  .object({
+    ...commonStructuredEvidenceShape,
+    inventoryComplete: z.boolean().nullable().default(null),
+    assets: z.array(mediaAssetSchema).max(200).default([]),
+  })
+  .strict();
+
+const mediaAccuracySchema = mediaAccuracyDetailsSchema
+  .extend({ evidenceState: z.enum(evidenceStateValues).default("missing") })
+  .strict()
+  .superRefine((value, context) => {
+    validateCommonStructuredEvidence(value, context, "mediaAccuracy");
+    if (value.evidenceState !== "verified") return;
+    if (value.inventoryComplete !== true) {
+      context.addIssue({
+        code: "custom",
+        path: ["inventoryComplete"],
+        message: "verified media accuracy requires a complete media inventory",
+      });
+    }
+    if (value.assets.length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["assets"],
+        message: "verified media accuracy requires at least one reviewed asset",
+      });
+    }
+    value.assets.forEach((asset, index) => {
+      for (const field of [
+        "sourceUrl",
+        "subjectLocation",
+        "licenseOrPermission",
+        "attribution",
+        "altText",
+      ] as const) {
+        if (!asset[field]) {
+          context.addIssue({
+            code: "custom",
+            path: ["assets", index, field],
+            message: `${field} is required for a verified media asset`,
+          });
+        }
+      }
+      for (const field of [
+        "accuracyStatus",
+        "relevanceStatus",
+        "desktopRenderStatus",
+        "mobileRenderStatus",
+      ] as const) {
+        if (asset[field] === "not_checked") {
+          context.addIssue({
+            code: "custom",
+            path: ["assets", index, field],
+            message: `${field} must be checked for verified media evidence`,
+          });
+        }
+      }
+    });
+  });
+
+const renderedSearchAppearanceSchema = z
+  .object({
+    title: nullableText(1000).default(null),
+    metaDescription: nullableText(2000).default(null),
+    canonical: nullableText(2048).default(null),
+    openGraphTitle: nullableText(1000).default(null),
+    openGraphDescription: nullableText(2000).default(null),
+    twitterTitle: nullableText(1000).default(null),
+    twitterDescription: nullableText(2000).default(null),
+    socialImage: nullableText(2048).default(null),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.canonical && !httpUrl.safeParse(value.canonical).success) {
+      context.addIssue({
+        code: "custom",
+        path: ["canonical"],
+        message: "rendered canonical must use http:// or https://",
+      });
+    }
+  });
+
+const googleSearchAppearanceSchema = z
+  .object({
+    query: nullableText(200).default(null),
+    locale: nullableText(100).default(null),
+    device: z.enum(serpDeviceValues).nullable().default(null),
+    displayedTitle: nullableText(1000).default(null),
+    displayedSnippet: nullableText(4000).default(null),
+    snippetSource: z
+      .enum(["meta_description", "body_passage", "mixed", "unknown"])
+      .nullable()
+      .default(null),
+    bodyPassage: nullableText(4000).default(null),
+    titleRewrite: z.boolean().nullable().default(null),
+    reprocessingStatus: z
+      .enum(["not_checked", "current", "stale", "not_indexed"])
+      .nullable()
+      .default(null),
+  })
+  .strict();
+
+const searchAppearanceCompetitorSchema = z
+  .object({
+    url: httpUrl,
+    title: shortText(1000),
+    snippet: nullableText(4000).default(null),
+    pattern: shortText(2000),
+  })
+  .strict();
+
+const emptyRenderedSearchAppearance = {
+  title: null,
+  metaDescription: null,
+  canonical: null,
+  openGraphTitle: null,
+  openGraphDescription: null,
+  twitterTitle: null,
+  twitterDescription: null,
+  socialImage: null,
+};
+
+const emptyGoogleSearchAppearance = {
+  query: null,
+  locale: null,
+  device: null,
+  displayedTitle: null,
+  displayedSnippet: null,
+  snippetSource: null,
+  bodyPassage: null,
+  titleRewrite: null,
+  reprocessingStatus: null,
+};
+
+const emptySearchAppearanceDetails = {
+  ...emptyCommonStructuredEvidence,
+  rendered: emptyRenderedSearchAppearance,
+  google: emptyGoogleSearchAppearance,
+  competitorPatterns: [],
+  proposedTitle: null,
+  proposedMetaDescription: null,
+};
+
+const searchAppearanceDetailsSchema = z
+  .object({
+    ...commonStructuredEvidenceShape,
+    rendered: renderedSearchAppearanceSchema.default(emptyRenderedSearchAppearance),
+    google: googleSearchAppearanceSchema.default(emptyGoogleSearchAppearance),
+    competitorPatterns: z.array(searchAppearanceCompetitorSchema).max(10).default([]),
+    proposedTitle: nullableText(1000).default(null),
+    proposedMetaDescription: nullableText(2000).default(null),
+  })
+  .strict();
+
+const searchAppearanceSchema = searchAppearanceDetailsSchema
+  .extend({ evidenceState: z.enum(evidenceStateValues).default("missing") })
+  .strict()
+  .superRefine((value, context) => {
+    validateCommonStructuredEvidence(value, context, "searchAppearance");
+    if (value.evidenceState !== "verified") return;
+    for (const [path, present] of [
+      [["rendered", "title"], Boolean(value.rendered.title)],
+      [["rendered", "metaDescription"], Boolean(value.rendered.metaDescription)],
+      [["rendered", "canonical"], Boolean(value.rendered.canonical)],
+      [["google", "query"], Boolean(value.google.query)],
+      [["google", "locale"], Boolean(value.google.locale)],
+      [["google", "device"], Boolean(value.google.device)],
+      [["google", "displayedTitle"], Boolean(value.google.displayedTitle)],
+      [["google", "displayedSnippet"], Boolean(value.google.displayedSnippet)],
+      [["google", "snippetSource"], Boolean(value.google.snippetSource)],
+    ] as const) {
+      if (!present) {
+        context.addIssue({
+          code: "custom",
+          path: [...path],
+          message: `${path.join(".")} is required for verified search appearance evidence`,
+        });
+      }
+    }
+  });
+
+const readabilityCheckSchema = z
+  .object({
+    status: z.enum(structuredCheckStatusValues).default("not_checked"),
+    finding: nullableText(2000).default(null),
+  })
+  .strict();
+
+const emptyReadabilityCheck = { status: "not_checked" as const, finding: null };
+const readabilityCheckNames = [
+  "answerFirst",
+  "plainLanguage",
+  "informationHierarchy",
+  "scannability",
+  "jargonExplained",
+  "actionClarity",
+  "accessibility",
+  "desktopUsability",
+  "mobileUsability",
+] as const;
+
+const readabilityChecksSchema = z
+  .object({
+    answerFirst: readabilityCheckSchema.default(emptyReadabilityCheck),
+    plainLanguage: readabilityCheckSchema.default(emptyReadabilityCheck),
+    informationHierarchy: readabilityCheckSchema.default(emptyReadabilityCheck),
+    scannability: readabilityCheckSchema.default(emptyReadabilityCheck),
+    jargonExplained: readabilityCheckSchema.default(emptyReadabilityCheck),
+    actionClarity: readabilityCheckSchema.default(emptyReadabilityCheck),
+    accessibility: readabilityCheckSchema.default(emptyReadabilityCheck),
+    desktopUsability: readabilityCheckSchema.default(emptyReadabilityCheck),
+    mobileUsability: readabilityCheckSchema.default(emptyReadabilityCheck),
+  })
+  .strict();
+
+const emptyReadabilityChecks = Object.fromEntries(
+  readabilityCheckNames.map((name) => [name, { ...emptyReadabilityCheck }]),
+) as Record<(typeof readabilityCheckNames)[number], typeof emptyReadabilityCheck>;
+
+const emptyReadabilityUserFriendlinessDetails = {
+  ...emptyCommonStructuredEvidence,
+  checks: emptyReadabilityChecks,
+};
+
+const readabilityUserFriendlinessDetailsSchema = z
+  .object({
+    ...commonStructuredEvidenceShape,
+    checks: readabilityChecksSchema.default(emptyReadabilityChecks),
+  })
+  .strict();
+
+const readabilityUserFriendlinessSchema = readabilityUserFriendlinessDetailsSchema
+  .extend({ evidenceState: z.enum(evidenceStateValues).default("missing") })
+  .strict()
+  .superRefine((value, context) => {
+    validateCommonStructuredEvidence(value, context, "readabilityUserFriendliness");
+    if (value.evidenceState !== "verified") return;
+    readabilityCheckNames.forEach((name) => {
+      const check = value.checks[name];
+      if (check.status === "not_checked") {
+        context.addIssue({
+          code: "custom",
+          path: ["checks", name, "status"],
+          message: `${name} must be checked for verified readability evidence`,
+        });
+      }
+      if (!check.finding) {
+        context.addIssue({
+          code: "custom",
+          path: ["checks", name, "finding"],
+          message: `${name} needs a finding for verified readability evidence`,
+        });
+      }
+    });
+  });
+
+const inboundInternalSourceSchema = z
+  .object({
+    sourceUrl: httpUrl,
+    anchors: textArray(100, 1000),
+  })
+  .strict();
+
+const brokenLinkEvidenceSchema = z
+  .object({
+    url: httpUrl,
+    statusCode: z.number().int().min(100).max(599).nullable().default(null),
+    anchorText: nullableText(1000).default(null),
+  })
+  .strict();
+
+const technicalCrawlSchema = z
+  .object({
+    crawlId: nullableText(300).default(null),
+    crawledAt: nullableDateTime.default(null),
+    status: z.enum(["completed", "failed", "running", "missing"]).nullable().default(null),
+    pageStatusCode: z.number().int().min(100).max(599).nullable().default(null),
+    indexable: z.boolean().nullable().default(null),
+    canonical: nullableText(2048).default(null),
+    schemaTypes: textArray(100, 300).default([]),
+    internalLinksOut: nonNegativeSafeInteger.nullable().default(null),
+    inboundInternalLinks: nonNegativeSafeInteger.nullable().default(null),
+    inboundSources: z.array(inboundInternalSourceSchema).max(1000).default([]),
+    orphanStatus: z.enum(["not_orphan", "orphan", "unknown"]).nullable().default(null),
+    brokenLinkStatus: z.enum(["none_found", "found", "unknown"]).nullable().default(null),
+    brokenLinks: z.array(brokenLinkEvidenceSchema).max(500).default([]),
+    missingReason: nullableText(4000).default(null),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.canonical && !httpUrl.safeParse(value.canonical).success) {
+      context.addIssue({
+        code: "custom",
+        path: ["canonical"],
+        message: "crawl canonical must use http:// or https://",
+      });
+    }
+    if (value.inboundInternalLinks === 0 && value.inboundSources.length > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["inboundSources"],
+        message: "a zero inbound-link count cannot have inbound sources",
+      });
+    }
+    if (
+      value.inboundInternalLinks !== null &&
+      value.inboundInternalLinks > 0 &&
+      value.inboundSources.length === 0
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["inboundSources"],
+        message: "known inbound links need their source URLs and anchors",
+      });
+    }
+    value.inboundSources.forEach((source, index) => {
+      if (source.anchors.length === 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["inboundSources", index, "anchors"],
+          message: "each inbound source needs at least one observed anchor",
+        });
+      }
+    });
+    if (value.brokenLinkStatus === "found" && value.brokenLinks.length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["brokenLinks"],
+        message: "found broken links need their URLs",
+      });
+    }
+    if (value.brokenLinkStatus === "none_found" && value.brokenLinks.length > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["brokenLinks"],
+        message: "none_found cannot include broken links",
+      });
+    }
+  });
+
+const cwvEvidenceSchema = z
+  .object({
+    evidenceState: z.enum(evidenceStateValues).default("missing"),
+    sourceUrl: nullableText(2048).default(null),
+    device: z.enum(serpDeviceValues).nullable().default(null),
+    checkedAt: nullableDateTime.default(null),
+    lcp: z.number().positive().finite().nullable().default(null),
+    inp: z.number().positive().finite().nullable().default(null),
+    cls: z.number().nonnegative().finite().nullable().default(null),
+    missingReason: nullableText(4000).default(null),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.sourceUrl && !httpUrl.safeParse(value.sourceUrl).success) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceUrl"],
+        message: "CWV sourceUrl must use http:// or https://",
+      });
+    }
+    if (value.evidenceState === "verified") {
+      for (const [field, present] of [
+        ["sourceUrl", Boolean(value.sourceUrl)],
+        ["device", Boolean(value.device)],
+        ["checkedAt", Boolean(value.checkedAt)],
+        ["lcp", value.lcp !== null],
+        ["inp", value.inp !== null],
+        ["cls", value.cls !== null],
+      ] as const) {
+        if (!present) {
+          context.addIssue({
+            code: "custom",
+            path: [field],
+            message: `${field} is required for verified Core Web Vitals evidence`,
+          });
+        }
+      }
+      if (value.missingReason) {
+        context.addIssue({
+          code: "custom",
+          path: ["missingReason"],
+          message: "verified Core Web Vitals cannot also have a missing reason",
+        });
+      }
+      return;
+    }
+  });
+
+const emptyTechnicalCrawl = {
+  crawlId: null,
+  crawledAt: null,
+  status: null,
+  pageStatusCode: null,
+  indexable: null,
+  canonical: null,
+  schemaTypes: [],
+  internalLinksOut: null,
+  inboundInternalLinks: null,
+  inboundSources: [],
+  orphanStatus: null,
+  brokenLinkStatus: null,
+  brokenLinks: [],
+  missingReason: null,
+};
+
+const emptyCwvEvidence = {
+  evidenceState: "missing" as const,
+  sourceUrl: null,
+  device: null,
+  checkedAt: null,
+  lcp: null,
+  inp: null,
+  cls: null,
+  missingReason: null,
+};
+
+const emptyTechnicalSnapshotDetails = {
+  ...emptyCommonStructuredEvidence,
+  crawl: emptyTechnicalCrawl,
+  cwv: emptyCwvEvidence,
+};
+
+const technicalSnapshotDetailsSchema = z
+  .object({
+    ...commonStructuredEvidenceShape,
+    crawl: technicalCrawlSchema.default(emptyTechnicalCrawl),
+    cwv: cwvEvidenceSchema.default(emptyCwvEvidence),
+  })
+  .strict();
+
+const technicalSnapshotSchema = technicalSnapshotDetailsSchema
+  .extend({ evidenceState: z.enum(evidenceStateValues).default("missing") })
+  .strict()
+  .superRefine((value, context) => {
+    validateCommonStructuredEvidence(value, context, "technicalSnapshot");
+    if (value.evidenceState === "not_applicable" || value.evidenceState === "missing") {
+      return;
+    }
+    const requiredCrawlFacts = [
+      ["crawlId", Boolean(value.crawl.crawlId)],
+      ["crawledAt", Boolean(value.crawl.crawledAt)],
+      ["status", Boolean(value.crawl.status)],
+      ["pageStatusCode", value.crawl.pageStatusCode !== null],
+      ["indexable", value.crawl.indexable !== null],
+      ["canonical", Boolean(value.crawl.canonical)],
+      ["internalLinksOut", value.crawl.internalLinksOut !== null],
+      ["inboundInternalLinks", value.crawl.inboundInternalLinks !== null],
+      ["orphanStatus", Boolean(value.crawl.orphanStatus)],
+      ["brokenLinkStatus", Boolean(value.crawl.brokenLinkStatus)],
+    ] as const;
+    const crawlMissing = requiredCrawlFacts.filter(([, present]) => !present);
+    if (value.evidenceState === "verified") {
+      if (value.crawl.status !== "completed") {
+        context.addIssue({
+          code: "custom",
+          path: ["crawl", "status"],
+          message: "verified technical evidence requires a completed crawl",
+        });
+      }
+      crawlMissing.forEach(([field]) =>
+        context.addIssue({
+          code: "custom",
+          path: ["crawl", field],
+          message: `${field} is required for verified technical evidence`,
+        }),
+      );
+      if ([value.crawl.orphanStatus, value.crawl.brokenLinkStatus].includes("unknown")) {
+        context.addIssue({
+          code: "custom",
+          path: ["crawl"],
+          message: "verified technical evidence cannot leave orphan or broken-link status unknown",
+        });
+      }
+      if (value.cwv.evidenceState !== "verified") {
+        context.addIssue({
+          code: "custom",
+          path: ["cwv", "evidenceState"],
+          message: "verified technical evidence requires verified Core Web Vitals",
+        });
+      }
+      return;
+    }
+    if ((crawlMissing.length > 0 || value.crawl.status !== "completed") && !value.crawl.missingReason) {
+      context.addIssue({
+        code: "custom",
+        path: ["crawl", "missingReason"],
+        message: "partial technical evidence needs an explicit reason for missing crawl facts",
+      });
+    }
+    if (
+      (value.cwv.evidenceState !== "verified" ||
+        value.cwv.lcp === null ||
+        value.cwv.inp === null ||
+        value.cwv.cls === null) &&
+      !value.cwv.missingReason
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["cwv", "missingReason"],
+        message: "partial technical evidence needs an explicit reason for missing Core Web Vitals",
+      });
+    }
+  });
+
 const decisionSchema = z
   .object({
     state: z.enum(decisionStateValues).default("pending"),
@@ -1339,6 +1979,22 @@ const contentFields = {
     evidence: [],
     gaps: [],
     details: [],
+    evidenceState: "missing",
+  }),
+  mediaAccuracy: mediaAccuracySchema.default({
+    ...emptyMediaAccuracyDetails,
+    evidenceState: "missing",
+  }),
+  searchAppearance: searchAppearanceSchema.default({
+    ...emptySearchAppearanceDetails,
+    evidenceState: "missing",
+  }),
+  readabilityUserFriendliness: readabilityUserFriendlinessSchema.default({
+    ...emptyReadabilityUserFriendlinessDetails,
+    evidenceState: "missing",
+  }),
+  technicalSnapshot: technicalSnapshotSchema.default({
+    ...emptyTechnicalSnapshotDetails,
     evidenceState: "missing",
   }),
   decision: decisionSchema.default({
@@ -1520,6 +2176,10 @@ function validateWorkflowControls(
     serp?: z.output<typeof serpSchema>;
     offer?: z.output<typeof offerSchema>;
     eeat?: z.output<typeof eeatSchema>;
+    mediaAccuracy?: z.output<typeof mediaAccuracySchema>;
+    searchAppearance?: z.output<typeof searchAppearanceSchema>;
+    readabilityUserFriendliness?: z.output<typeof readabilityUserFriendlinessSchema>;
+    technicalSnapshot?: z.output<typeof technicalSnapshotSchema>;
     decision?: z.output<typeof decisionSchema>;
     gates?: z.output<typeof gatesSchema>;
     manualReview?: z.output<typeof manualReviewSchema>;
@@ -1934,6 +2594,35 @@ function validateWorkflowControls(
       message: "eeat.evidenceState must not be missing at completion",
     });
   }
+  for (const [evidenceName, evidence] of [
+    ["mediaAccuracy", value.mediaAccuracy],
+    ["searchAppearance", value.searchAppearance],
+    ["readabilityUserFriendliness", value.readabilityUserFriendliness],
+    ["technicalSnapshot", value.technicalSnapshot],
+  ] as const) {
+    if (!evidence || evidence.evidenceState === "missing") {
+      context.addIssue({
+        code: "custom",
+        path: [evidenceName, "evidenceState"],
+        message: `${evidenceName}.evidenceState must not be missing for an approved review`,
+      });
+    }
+  }
+  if (value.indexPolicy === "index") {
+    for (const [evidenceName, evidence] of [
+      ["searchAppearance", value.searchAppearance],
+      ["readabilityUserFriendliness", value.readabilityUserFriendliness],
+      ["technicalSnapshot", value.technicalSnapshot],
+    ] as const) {
+      if (evidence?.evidenceState === "not_applicable") {
+        context.addIssue({
+          code: "custom",
+          path: [evidenceName, "evidenceState"],
+          message: `${evidenceName}.evidenceState cannot be not_applicable for an indexable page`,
+        });
+      }
+    }
+  }
   if (
     !value.keywordPlanner ||
     value.keywordPlanner.evidenceState === "missing"
@@ -2315,6 +3004,10 @@ export const patchPageReviewSchema = z
     serp: serpSchema.optional(),
     offer: offerSchema.optional(),
     eeat: eeatSchema.optional(),
+    mediaAccuracy: mediaAccuracySchema.optional(),
+    searchAppearance: searchAppearanceSchema.optional(),
+    readabilityUserFriendliness: readabilityUserFriendlinessSchema.optional(),
+    technicalSnapshot: technicalSnapshotSchema.optional(),
     decision: decisionSchema.optional(),
     gates: gatesSchema.optional(),
     manualReview: manualReviewSchema.optional(),
@@ -2469,6 +3162,144 @@ function normalizeMeasurementPlanEvidence(
   };
 }
 
+function normalizeStructuredSources(
+  sources: z.output<typeof evidenceSourceSchema>[],
+) {
+  return sources.map((source) => ({
+    ...source,
+    url: new URL(source.url).toString(),
+  }));
+}
+
+function structuredEvidenceResult<T>(
+  evidenceState: (typeof evidenceStateValues)[number],
+  details: T,
+  emptyDetails: T,
+) {
+  return {
+    state: apiEnumToDb(evidenceState),
+    details:
+      JSON.stringify(details) === JSON.stringify(emptyDetails) ? null : details,
+  };
+}
+
+function normalizeMediaAccuracyEvidence(
+  input: z.output<typeof mediaAccuracySchema>,
+) {
+  const details = {
+    checkedAt: input.checkedAt,
+    reviewer: input.reviewer,
+    sources: normalizeStructuredSources(input.sources),
+    finding: input.finding,
+    limitation: input.limitation,
+    notApplicableReason: input.notApplicableReason,
+    inventoryComplete: input.inventoryComplete,
+    assets: input.assets.map((asset) => ({
+      ...asset,
+      sourceUrl: normalizeEvidenceUrl(asset.sourceUrl),
+    })),
+  };
+  return structuredEvidenceResult(
+    input.evidenceState,
+    details,
+    emptyMediaAccuracyDetails,
+  );
+}
+
+function normalizeSearchAppearanceEvidence(
+  input: z.output<typeof searchAppearanceSchema>,
+  expectedDomain: string,
+) {
+  const details = {
+    checkedAt: input.checkedAt,
+    reviewer: input.reviewer,
+    sources: normalizeStructuredSources(input.sources),
+    finding: input.finding,
+    limitation: input.limitation,
+    notApplicableReason: input.notApplicableReason,
+    rendered: {
+      ...input.rendered,
+      canonical: input.rendered.canonical
+        ? normalizeOwnerPage(input.rendered.canonical, expectedDomain)
+        : null,
+    },
+    google: {
+      ...input.google,
+      query: input.google.query
+        ? normalizeSavedQuery(input.google.query)
+        : null,
+    },
+    competitorPatterns: input.competitorPatterns.map((competitor) => ({
+      ...competitor,
+      url: new URL(competitor.url).toString(),
+    })),
+    proposedTitle: input.proposedTitle,
+    proposedMetaDescription: input.proposedMetaDescription,
+  };
+  return structuredEvidenceResult(
+    input.evidenceState,
+    details,
+    emptySearchAppearanceDetails,
+  );
+}
+
+function normalizeReadabilityUserFriendlinessEvidence(
+  input: z.output<typeof readabilityUserFriendlinessSchema>,
+) {
+  const details = {
+    checkedAt: input.checkedAt,
+    reviewer: input.reviewer,
+    sources: normalizeStructuredSources(input.sources),
+    finding: input.finding,
+    limitation: input.limitation,
+    notApplicableReason: input.notApplicableReason,
+    checks: input.checks,
+  };
+  return structuredEvidenceResult(
+    input.evidenceState,
+    details,
+    emptyReadabilityUserFriendlinessDetails,
+  );
+}
+
+function normalizeTechnicalSnapshotEvidence(
+  input: z.output<typeof technicalSnapshotSchema>,
+  expectedDomain: string,
+) {
+  const details = {
+    checkedAt: input.checkedAt,
+    reviewer: input.reviewer,
+    sources: normalizeStructuredSources(input.sources),
+    finding: input.finding,
+    limitation: input.limitation,
+    notApplicableReason: input.notApplicableReason,
+    crawl: {
+      ...input.crawl,
+      canonical: input.crawl.canonical
+        ? normalizeOwnerPage(input.crawl.canonical, expectedDomain)
+        : null,
+      schemaTypes: normalizeList(input.crawl.schemaTypes),
+      inboundSources: input.crawl.inboundSources.map((source) => ({
+        sourceUrl: normalizeOwnerPage(source.sourceUrl, expectedDomain),
+        anchors: normalizeList(source.anchors),
+      })),
+      brokenLinks: input.crawl.brokenLinks.map((link) => ({
+        ...link,
+        url: new URL(link.url).toString(),
+      })),
+    },
+    cwv: {
+      ...input.cwv,
+      sourceUrl: normalizeEvidenceUrl(input.cwv.sourceUrl),
+    },
+  };
+  return structuredEvidenceResult(
+    input.evidenceState,
+    details,
+    emptyTechnicalSnapshotDetails,
+  );
+}
+
 export function normalizePageReviewInput(
   input: CreatePageReviewInput,
   expectedDomain: string,
@@ -2491,6 +3322,21 @@ export function normalizePageReviewInput(
   );
   const measurementPlanEvidence = normalizeMeasurementPlanEvidence(
     input.measurementPlan,
+    expectedDomain,
+  );
+  const mediaAccuracyEvidence = normalizeMediaAccuracyEvidence(
+    input.mediaAccuracy,
+  );
+  const searchAppearanceEvidence = normalizeSearchAppearanceEvidence(
+    input.searchAppearance,
+    expectedDomain,
+  );
+  const readabilityUserFriendlinessEvidence =
+    normalizeReadabilityUserFriendlinessEvidence(
+      input.readabilityUserFriendliness,
+    );
+  const technicalSnapshotEvidence = normalizeTechnicalSnapshotEvidence(
+    input.technicalSnapshot,
     expectedDomain,
   );
 
@@ -2551,6 +3397,16 @@ export function normalizePageReviewInput(
     eeatGaps: normalizeList(input.eeat.gaps),
     eeatEvidenceDetails: input.eeat.details,
     eeatEvidenceState: apiEnumToDb(input.eeat.evidenceState),
+    mediaAccuracyEvidenceState: mediaAccuracyEvidence.state,
+    mediaAccuracyDetails: mediaAccuracyEvidence.details,
+    searchAppearanceEvidenceState: searchAppearanceEvidence.state,
+    searchAppearanceDetails: searchAppearanceEvidence.details,
+    readabilityUserFriendlinessEvidenceState:
+      readabilityUserFriendlinessEvidence.state,
+    readabilityUserFriendlinessDetails:
+      readabilityUserFriendlinessEvidence.details,
+    technicalSnapshotEvidenceState: technicalSnapshotEvidence.state,
+    technicalSnapshotDetails: technicalSnapshotEvidence.details,
     decisionState: apiEnumToDb(input.decision.state),
     decisionRationale: input.decision.rationale,
     proposedChange: input.decision.proposedChange,
@@ -2622,6 +3478,13 @@ export function normalizePageReviewPatch(
     serp: input.serp ?? currentApi.serp,
     offer: input.offer ?? currentApi.offer,
     eeat: input.eeat ?? currentApi.eeat,
+    mediaAccuracy: input.mediaAccuracy ?? currentApi.mediaAccuracy,
+    searchAppearance: input.searchAppearance ?? currentApi.searchAppearance,
+    readabilityUserFriendliness:
+      input.readabilityUserFriendliness ??
+      currentApi.readabilityUserFriendliness,
+    technicalSnapshot:
+      input.technicalSnapshot ?? currentApi.technicalSnapshot,
     decision: input.decision ?? currentApi.decision,
     gates: input.gates ?? currentApi.gates,
     manualReview: input.manualReview ?? currentApi.manualReview,
@@ -2670,6 +3533,28 @@ function asGoogleTrendsEvidenceDetails(value: unknown) {
 function asMeasurementPlanDetails(value: unknown) {
   const parsed = measurementPlanDetailsSchema.safeParse(value ?? {});
   return parsed.success ? parsed.data : { ...emptyMeasurementPlanDetails };
+}
+
+function asMediaAccuracyDetails(value: unknown) {
+  const parsed = mediaAccuracyDetailsSchema.safeParse(value ?? {});
+  return parsed.success ? parsed.data : { ...emptyMediaAccuracyDetails };
+}
+
+function asSearchAppearanceDetails(value: unknown) {
+  const parsed = searchAppearanceDetailsSchema.safeParse(value ?? {});
+  return parsed.success ? parsed.data : { ...emptySearchAppearanceDetails };
+}
+
+function asReadabilityUserFriendlinessDetails(value: unknown) {
+  const parsed = readabilityUserFriendlinessDetailsSchema.safeParse(value ?? {});
+  return parsed.success
+    ? parsed.data
+    : { ...emptyReadabilityUserFriendlinessDetails };
+}
+
+function asTechnicalSnapshotDetails(value: unknown) {
+  const parsed = technicalSnapshotDetailsSchema.safeParse(value ?? {});
+  return parsed.success ? parsed.data : { ...emptyTechnicalSnapshotDetails };
 }
 
 function iso(value: Date | null) {
@@ -2806,6 +3691,26 @@ export function pageReviewToApi(review: PageReview) {
       gaps: asStringArray(review.eeatGaps),
       details: asEeatEvidenceDetails(review.eeatEvidenceDetails),
       evidenceState: dbEnumToApi(review.eeatEvidenceState),
+    },
+    mediaAccuracy: {
+      evidenceState: dbEnumToApi(review.mediaAccuracyEvidenceState),
+      ...asMediaAccuracyDetails(review.mediaAccuracyDetails),
+    },
+    searchAppearance: {
+      evidenceState: dbEnumToApi(review.searchAppearanceEvidenceState),
+      ...asSearchAppearanceDetails(review.searchAppearanceDetails),
+    },
+    readabilityUserFriendliness: {
+      evidenceState: dbEnumToApi(
+        review.readabilityUserFriendlinessEvidenceState,
+      ),
+      ...asReadabilityUserFriendlinessDetails(
+        review.readabilityUserFriendlinessDetails,
+      ),
+    },
+    technicalSnapshot: {
+      evidenceState: dbEnumToApi(review.technicalSnapshotEvidenceState),
+      ...asTechnicalSnapshotDetails(review.technicalSnapshotDetails),
     },
     decision: {
       state: dbEnumToApi(review.decisionState),
@@ -2949,6 +3854,22 @@ const pageReviewChangeGroups = {
     "eeatGaps",
     "eeatEvidenceDetails",
     "eeatEvidenceState",
+  ],
+  mediaAccuracy: [
+    "mediaAccuracyEvidenceState",
+    "mediaAccuracyDetails",
+  ],
+  searchAppearance: [
+    "searchAppearanceEvidenceState",
+    "searchAppearanceDetails",
+  ],
+  readabilityUserFriendliness: [
+    "readabilityUserFriendlinessEvidenceState",
+    "readabilityUserFriendlinessDetails",
+  ],
+  technicalSnapshot: [
+    "technicalSnapshotEvidenceState",
+    "technicalSnapshotDetails",
   ],
   decision: [
     "decisionState",

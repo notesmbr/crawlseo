@@ -10,6 +10,8 @@ import {
   isApprovedManualState,
   inspectPageReviewDraft,
   isActiveManualState,
+  evaluateSavedKeywordOwnership,
+  normalizeSavedKeywordOwners,
   serializePageReviewDraft,
   shouldConfirmRouteNavigation,
   splitReviewLines,
@@ -134,6 +136,140 @@ const rawReview = {
     limitation:
       "The GA4 comparison window is short and GSC data can lag several days.",
     notApplicableReason: null,
+  },
+  mediaAccuracy: {
+    evidenceState: "partial",
+    checkedAt: "2026-08-16T22:00:00.000Z",
+    reviewer: "BlueStreamFly River Review Team",
+    sources: [
+      {
+        label: "Forest Service photograph",
+        url: "https://commons.wikimedia.org/wiki/File:Lochsa_River_in_Clearwater_NF.jpg",
+        checkedAt: "2026-08-16T22:00:00.000Z",
+      },
+    ],
+    finding: "The hero is traceable and correctly attributed.",
+    limitation: "The photograph is historical place evidence, not a live condition image.",
+    notApplicableReason: null,
+    inventoryComplete: true,
+    assets: [
+      {
+        placement: "hero and social preview",
+        assetUrl:
+          "https://bluestreamfly.com/images/report-heroes/idaho-lochsa-river-usfs.webp",
+        sourceUrl:
+          "https://commons.wikimedia.org/wiki/File:Lochsa_River_in_Clearwater_NF.jpg",
+        subjectLocation: "Lochsa River in Clearwater National Forest",
+        creator: "U.S. Forest Service Northern Region",
+        capturedAt: "2011-08-05",
+        licenseOrPermission: "CC BY 2.0",
+        attribution: "U.S. Forest Service Northern Region",
+        altText: "Lochsa River flowing through forest",
+        caption: "Historical Lochsa River place photograph",
+        accuracyStatus: "pass",
+        relevanceStatus: "pass",
+        desktopRenderStatus: "pass",
+        mobileRenderStatus: "pass",
+        limitation: "Not current-condition evidence.",
+      },
+    ],
+  },
+  searchAppearance: {
+    evidenceState: "partial",
+    checkedAt: "2026-08-16T22:05:00.000Z",
+    reviewer: "BlueStreamFly River Review Team",
+    sources: [
+      {
+        label: "Live Lochsa report",
+        url: "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+        checkedAt: "2026-08-16T22:05:00.000Z",
+      },
+    ],
+    finding: "Rendered metadata is current; Google still showed an older body passage.",
+    limitation: "The observed Google result had not yet reprocessed the release.",
+    notApplicableReason: null,
+    rendered: {
+      title: "Lochsa River Fishing Report | Idaho",
+      metaDescription: "Current Lochsa River fishing report and trip guidance.",
+      canonical: "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+      openGraphTitle: "Lochsa River Fishing Report | Idaho",
+      openGraphDescription: "Current Lochsa River fishing report and trip guidance.",
+      twitterTitle: "Lochsa River Fishing Report | Idaho",
+      twitterDescription: "Current Lochsa River fishing report and trip guidance.",
+      socialImage:
+        "https://bluestreamfly.com/images/report-heroes/idaho-lochsa-river-usfs.webp",
+    },
+    google: {
+      query: "lochsa river fishing report",
+      locale: "Hollidaysburg, Pennsylvania",
+      device: "desktop",
+      displayedTitle: "BlueStreamFly",
+      displayedSnippet: "USGS shows current flow.",
+      snippetSource: "body_passage",
+      bodyPassage: "USGS shows current flow.",
+      titleRewrite: true,
+      reprocessingStatus: "stale",
+    },
+    competitorPatterns: [],
+    proposedTitle: null,
+    proposedMetaDescription: null,
+  },
+  readabilityUserFriendliness: {
+    evidenceState: "partial",
+    checkedAt: "2026-08-16T22:10:00.000Z",
+    reviewer: "BlueStreamFly River Review Team",
+    sources: [
+      {
+        label: "Rendered report",
+        url: "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+        checkedAt: "2026-08-16T22:10:00.000Z",
+      },
+    ],
+    finding: "The answer and trip plan are readable on desktop and mobile.",
+    limitation: "A full accessibility audit was not completed.",
+    notApplicableReason: null,
+    checks: {},
+  },
+  technicalSnapshot: {
+    evidenceState: "partial",
+    checkedAt: "2026-08-16T22:15:00.000Z",
+    reviewer: "BlueStreamFly River Review Team",
+    sources: [
+      {
+        label: "CrawlSEO canonical crawl",
+        url: "http://localhost:3030/sites/site-1/crawls/crawl-1",
+        checkedAt: "2026-08-16T22:15:00.000Z",
+      },
+    ],
+    finding: "The canonical crawl completed without a critical finding.",
+    limitation: "URL-level Core Web Vitals were unavailable.",
+    notApplicableReason: null,
+    crawl: {
+      crawlId: "crawl-1",
+      crawledAt: "2026-08-16T22:14:00.000Z",
+      status: "completed",
+      pageStatusCode: 200,
+      indexable: true,
+      canonical: "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+      schemaTypes: ["Article"],
+      internalLinksOut: 20,
+      inboundInternalLinks: 3,
+      inboundSources: [],
+      orphanStatus: "not_orphan",
+      brokenLinkStatus: "none_found",
+      brokenLinks: [],
+      missingReason: null,
+    },
+    cwv: {
+      evidenceState: "missing",
+      sourceUrl: null,
+      device: null,
+      checkedAt: null,
+      lcp: null,
+      inp: null,
+      cls: null,
+      missingReason: "No saved URL-level field report and PageSpeed quota was exhausted.",
+    },
   },
   topic: {
     cluster: "Idaho river reports",
@@ -262,6 +398,11 @@ assert.equal(review.measurementPlan.ga4.screenPageViews, "14");
 assert.equal(review.measurementPlan.primaryKpiMetric, "clicks");
 assert.equal(review.measurementPlan.guardrails.split("\n").length, 2);
 assert.equal(review.measurementPlan.comparisonWindows[0]?.clicks, "25");
+assert.equal(review.mediaAccuracy.assets[0]?.accuracyStatus, "pass");
+assert.equal(review.searchAppearance.google.snippetSource, "body_passage");
+assert.equal(review.readabilityUserFriendliness.checks.answerFirst.status, "not_checked");
+assert.equal(review.technicalSnapshot.crawl.pageStatusCode, "200");
+assert.equal(review.technicalSnapshot.cwv.lcp, "");
 assert.equal(review.eeatDetails[0]?.reviewer, "BlueStreamFly river review team");
 assert.equal(review.day7.status, "not_due");
 assert.equal(review.version, 3);
@@ -433,6 +574,44 @@ const approvedPlannedChange = {
   decisionChangeState: "planned",
 };
 assert.deepEqual(validatePageReview(approvedPlannedChange), []);
+assert.ok(
+  validatePageReview({
+    ...approvedPlannedChange,
+    mediaAccuracy: { ...approvedPlannedChange.mediaAccuracy, evidenceState: "missing" },
+  }).some((message) => message.includes("Media accuracy evidence cannot remain missing")),
+  "approved reviews require structured media evidence",
+);
+assert.ok(
+  validatePageReview({
+    ...approvedPlannedChange,
+    searchAppearance: {
+      ...approvedPlannedChange.searchAppearance,
+      evidenceState: "not_applicable",
+      notApplicableReason: "Skipped",
+    },
+  }).some((message) => message.includes("cannot be not applicable for an indexable page")),
+  "indexable pages cannot skip search appearance",
+);
+assert.ok(
+  validatePageReview({
+    ...approvedPlannedChange,
+    technicalSnapshot: {
+      ...approvedPlannedChange.technicalSnapshot,
+      cwv: { ...approvedPlannedChange.technicalSnapshot.cwv, missingReason: "" },
+    },
+  }).some((message) => message.includes("missing Core Web Vitals reason")),
+  "partial technical evidence names unavailable CWV evidence",
+);
+assert.ok(
+  validatePageReview({
+    ...approvedPlannedChange,
+    readabilityUserFriendliness: {
+      ...approvedPlannedChange.readabilityUserFriendliness,
+      evidenceState: "verified",
+    },
+  }).some((message) => message.includes("cannot remain not checked when verified")),
+  "verified readability requires all nine checks",
+);
 
 const sharedRiverTemplateChange = {
   ...approvedPlannedChange,
@@ -651,6 +830,32 @@ const validCompletion = {
   },
 };
 assert.deepEqual(validatePageReview(validCompletion), []);
+const savedOwners = normalizeSavedKeywordOwners([
+  {
+    id: "saved-1",
+    query: "Lochsa River Fishing Report",
+    ownerPage: review.canonicalUrl,
+    status: "active",
+  },
+]);
+const matchedOwnership = evaluateSavedKeywordOwnership(validCompletion, savedOwners);
+assert.equal(matchedOwnership.status, "matched");
+assert.deepEqual(validatePageReview(validCompletion, matchedOwnership), []);
+const mismatchedOwnership = evaluateSavedKeywordOwnership(validCompletion, [
+  { ...savedOwners[0]!, ownerPage: "https://bluestreamfly.com/fly-fishing-reports/idaho/clearwater-river" },
+]);
+assert.equal(mismatchedOwnership.status, "mismatch");
+assert.ok(
+  validatePageReview(validCompletion, mismatchedOwnership).some((message) =>
+    message.includes("SavedKeyword owner are reconciled"),
+  ),
+  "completion is blocked when PageReview and SavedKeyword owners disagree",
+);
+assert.equal(
+  evaluateSavedKeywordOwnership(validCompletion, []).status,
+  "missing",
+  "a tracked PageReview query without an active SavedKeyword is visible",
+);
 assert.ok(
   validatePageReview({ ...validCompletion, serpEvidenceState: "verified" }).some((message) =>
     message.includes("all five competitor rows"),
@@ -927,6 +1132,17 @@ assert.deepEqual(patch.measurementPlan.guardrails, [
   "GSC CTR must not decline materially while clicks rise.",
   "Official source accuracy and canonical indexability must remain intact.",
 ]);
+assert.equal(patch.mediaAccuracy.inventoryComplete, true);
+assert.equal(patch.mediaAccuracy.assets[0]?.accuracyStatus, "pass");
+assert.equal(patch.searchAppearance.google.titleRewrite, true);
+assert.equal(patch.searchAppearance.rendered.canonical, review.canonicalUrl);
+assert.equal(
+  patch.readabilityUserFriendliness.checks.answerFirst.status,
+  "not_checked",
+);
+assert.equal(patch.technicalSnapshot.crawl.pageStatusCode, 200);
+assert.equal(patch.technicalSnapshot.crawl.internalLinksOut, 20);
+assert.equal(patch.technicalSnapshot.cwv.lcp, null);
 assert.equal(patch.topic.editorialOwner, "BlueStreamFly river review team");
 assert.deepEqual(patch.serp.features, ["AI Overview", "People Also Ask"]);
 assert.equal(patch.serp.evidenceState, "partial");
@@ -1027,6 +1243,16 @@ assert.match(workboardSource, /Open Google Trends/);
 assert.match(workboardSource, /paid advertisers, not organic results/);
 assert.match(workboardSource, /relative interest, not search volume/);
 assert.match(workboardSource, /Nothing will be filled in automatically/);
+assert.match(workboardSource, /\/saved-keywords/);
+assert.match(workboardSource, /ownershipCheck\.message/);
+assert.match(workboardSource, /Completion is blocked until this is reconciled/);
+assert.match(workboardSource, /\/measurement\/health/);
+assert.match(workboardSource, /\/technical-snapshot\?canonical=/);
+assert.match(workboardSource, /Read-only measurement health/);
+assert.match(workboardSource, /Latest read-only CrawlSEO evidence/);
+assert.match(workboardSource, /Copy into unsaved review/);
+assert.match(workboardSource, /nothing was saved automatically/);
+assert.match(workboardSource, /never writes baseline values or saves this review/);
 assert.match(workboardSource, /Full canonical URL; leave blank when not applicable/);
 assert.match(workboardSource, /Draft saved\. No content was scheduled or published\./);
 assert.match(workboardSource, /Approved review saved\. No content was scheduled or published\./);

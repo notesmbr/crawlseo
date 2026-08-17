@@ -1,5 +1,17 @@
 const PAGESPEED_API_BASE = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
+export function getPageSpeedCapability() {
+  const apiKeyConfigured = Boolean(process.env.GOOGLE_PAGESPEED_KEY?.trim());
+  return {
+    available: true,
+    mode: "pagespeed_insights_api" as const,
+    apiKeyConfigured,
+    limitation: apiKeyConfigured
+      ? null
+      : "No API key is configured; unauthenticated quota may be unavailable.",
+  };
+}
+
 export interface CoreWebVitals {
   lcp?: number; // Largest Contentful Paint (seconds)
   fid?: number; // First Input Delay (milliseconds) - deprecated
@@ -18,16 +30,78 @@ export interface PageSpeedResult {
   url: string;
   strategy: "MOBILE" | "DESKTOP";
   lighthouseScore: number;
+  fieldDataState: "URL_LEVEL" | "NO_URL_LEVEL_DATA";
+  fieldDataCategory?: string;
+  originFieldDataAvailable: boolean;
   vitals: CoreWebVitals;
+  labVitals: CoreWebVitals;
   metrics: PerformanceMetrics;
   fetchTime: string;
+}
+
+export class PageSpeedClientError extends Error {
+  readonly code:
+    | "PAGESPEED_QUOTA_EXHAUSTED"
+    | "PAGESPEED_AUTH_FAILED"
+    | "PAGESPEED_REQUEST_FAILED"
+    | "PAGESPEED_INVALID_RESPONSE";
+  readonly status: number;
+
+  constructor(
+    code:
+      | "PAGESPEED_QUOTA_EXHAUSTED"
+      | "PAGESPEED_AUTH_FAILED"
+      | "PAGESPEED_REQUEST_FAILED"
+      | "PAGESPEED_INVALID_RESPONSE",
+    message: string,
+    status: number,
+  ) {
+    super(message);
+    this.name = "PageSpeedClientError";
+    this.code = code;
+    this.status = status;
+  }
 }
 
 /**
  * Converts milliseconds to seconds
  */
 function msToSeconds(ms?: number): number | undefined {
-  return ms ? ms / 1000 : undefined;
+  return ms === undefined ? undefined : ms / 1000;
+}
+
+type FieldMetric = { percentile?: number };
+
+export function parsePageSpeedFieldVitals(data: {
+  loadingExperience?: {
+    overall_category?: string;
+    metrics?: Record<string, FieldMetric>;
+  };
+  originLoadingExperience?: { metrics?: Record<string, FieldMetric> };
+}) {
+  const metrics = data.loadingExperience?.metrics;
+  const lcpMs = metrics?.LARGEST_CONTENTFUL_PAINT_MS?.percentile;
+  const clsPercentile = metrics?.CUMULATIVE_LAYOUT_SHIFT_SCORE?.percentile;
+  const inpMs = metrics?.INTERACTION_TO_NEXT_PAINT?.percentile;
+  const available = [lcpMs, clsPercentile, inpMs].some(
+    (value) => typeof value === "number" && Number.isFinite(value),
+  );
+  return {
+    fieldDataState: available ? ("URL_LEVEL" as const) : ("NO_URL_LEVEL_DATA" as const),
+    fieldDataCategory: data.loadingExperience?.overall_category,
+    originFieldDataAvailable: Boolean(
+      data.originLoadingExperience?.metrics &&
+        Object.keys(data.originLoadingExperience.metrics).length,
+    ),
+    vitals: available
+      ? {
+          lcp: typeof lcpMs === "number" ? msToSeconds(lcpMs) : undefined,
+          cls:
+            typeof clsPercentile === "number" ? clsPercentile / 100 : undefined,
+          inp: typeof inpMs === "number" ? inpMs : undefined,
+        }
+      : {},
+  };
 }
 
 /**
@@ -35,27 +109,48 @@ function msToSeconds(ms?: number): number | undefined {
  */
 export async function fetchPageSpeed(
   url: string,
-  strategy: "MOBILE" | "DESKTOP" = "MOBILE"
+  strategy: "MOBILE" | "DESKTOP" = "MOBILE",
+  dependencies: {
+    environment?: Record<string, string | undefined>;
+    fetchImpl?: typeof fetch;
+  } = {},
 ): Promise<PageSpeedResult> {
   const params = new URLSearchParams({
     url,
     category: "PERFORMANCE",
     strategy,
   });
-  if (process.env.GOOGLE_PAGESPEED_KEY) {
-    params.set("key", process.env.GOOGLE_PAGESPEED_KEY);
+  const environment = dependencies.environment ?? process.env;
+  if (environment.GOOGLE_PAGESPEED_KEY) {
+    params.set("key", environment.GOOGLE_PAGESPEED_KEY);
   }
 
-  const response = await fetch(`${PAGESPEED_API_BASE}?${params}`, {
+  const response = await (dependencies.fetchImpl ?? fetch)(`${PAGESPEED_API_BASE}?${params}`, {
     headers: {
       "Content-Type": "application/json",
     },
+    cache: "no-store",
   });
 
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(
-      `Failed to fetch PageSpeed data: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}. Set GOOGLE_PAGESPEED_KEY for reliable quota.`
+    if (response.status === 429) {
+      throw new PageSpeedClientError(
+        "PAGESPEED_QUOTA_EXHAUSTED",
+        "PageSpeed Insights quota is temporarily exhausted.",
+        429,
+      );
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new PageSpeedClientError(
+        "PAGESPEED_AUTH_FAILED",
+        "PageSpeed Insights access was denied.",
+        502,
+      );
+    }
+    throw new PageSpeedClientError(
+      "PAGESPEED_REQUEST_FAILED",
+      "PageSpeed Insights could not complete this check.",
+      502,
     );
   }
 
@@ -73,22 +168,32 @@ export async function fetchPageSpeed(
         }
       >;
     };
+    loadingExperience?: {
+      overall_category?: string;
+      metrics?: Record<string, FieldMetric>;
+    };
+    originLoadingExperience?: { metrics?: Record<string, FieldMetric> };
+    analysisUTCTimestamp?: string;
   };
 
   const lighthouseResult = data.lighthouseResult;
 
   if (!lighthouseResult) {
-    throw new Error("Invalid PageSpeed response: missing lighthouseResult");
+    throw new PageSpeedClientError(
+      "PAGESPEED_INVALID_RESPONSE",
+      "PageSpeed Insights returned no Lighthouse result.",
+      502,
+    );
   }
 
   const audits = lighthouseResult.audits || {};
 
-  // Extract Core Web Vitals
-  const vitals: CoreWebVitals = {
+  const labVitals: CoreWebVitals = {
     lcp: msToSeconds(audits["largest-contentful-paint"]?.numericValue),
     cls: audits["cumulative-layout-shift"]?.numericValue,
     inp: audits["interaction-to-next-paint"]?.numericValue,
   };
+  const fieldData = parsePageSpeedFieldVitals(data);
 
   // Extract performance metrics
   const metrics: PerformanceMetrics = {
@@ -104,9 +209,13 @@ export async function fetchPageSpeed(
     url,
     strategy,
     lighthouseScore: metrics.perfScore,
-    vitals,
+    fieldDataState: fieldData.fieldDataState,
+    fieldDataCategory: fieldData.fieldDataCategory,
+    originFieldDataAvailable: fieldData.originFieldDataAvailable,
+    vitals: fieldData.vitals,
+    labVitals,
     metrics,
-    fetchTime: new Date().toISOString(),
+    fetchTime: data.analysisUTCTimestamp ?? new Date().toISOString(),
   };
 }
 

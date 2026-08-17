@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   CHANGE_STATE_OPTIONS,
+  AUDIT_CHECK_STATUS_OPTIONS,
+  BROKEN_LINK_STATUS_OPTIONS,
   CHANGE_BLAST_RADIUS_OPTIONS,
   CHANGE_SCOPE_OPTIONS,
   DECISION_STATE_OPTIONS,
@@ -39,6 +41,9 @@ import {
   MANUAL_CHAT_STATE_OPTIONS,
   MEASUREMENT_KPI_DIRECTION_OPTIONS,
   MEASUREMENT_KPI_SOURCE_OPTIONS,
+  GOOGLE_REPROCESSING_STATUS_OPTIONS,
+  GOOGLE_SNIPPET_SOURCE_OPTIONS,
+  ORPHAN_STATUS_OPTIONS,
   PAGE_FAMILIES,
   PAGE_REVIEW_PRIORITIES,
   PAGE_REVIEW_STATUSES,
@@ -47,13 +52,19 @@ import {
   SERP_DEVICE_OPTIONS,
   SERP_COMPETITION_OPTIONS,
   SERP_METHOD_OPTIONS,
+  TECHNICAL_CRAWL_STATUS_OPTIONS,
+  READABILITY_CHECK_KEYS,
+  emptyEvidenceSource,
   emptyEeatEvidenceDetail,
+  emptyMediaAssetEvidence,
   emptyMeasurementComparisonWindow,
+  evaluateSavedKeywordOwnership,
   isActiveManualState,
   isApprovedManualState,
   matchesPageReviewFilters,
   normalizePageReview,
   normalizePageReviewSummary,
+  normalizeSavedKeywordOwners,
   pageReviewDraftStorageKey,
   pageReviewPatchInput,
   inspectPageReviewDraft,
@@ -64,14 +75,22 @@ import {
   type PageReviewRecord,
   type PageReviewSummary,
   type EeatEvidenceDetail,
+  type EvidenceGroupFields,
+  type EvidenceSource,
   type GoogleTrendsEvidence,
   type KeywordPlannerEvidence,
   type Ga4BaselineEvidence,
   type GscBaselineEvidence,
   type MeasurementPlanEvidence,
   type MeasurementComparisonWindow,
+  type MediaAccuracyEvidence,
+  type MediaAssetEvidence,
+  type ReadabilityUserFriendlinessEvidence,
   type ReviewGate,
   type SerpCompetitor,
+  type SearchAppearanceEvidence,
+  type SavedKeywordOwner,
+  type TechnicalSnapshotEvidence,
 } from "@/lib/page-review-workboard";
 
 type Props = {
@@ -99,6 +118,177 @@ type PlannerCheckResponse = {
   }>;
 };
 
+type MeasurementRunSummary = {
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  latestDataDate: string | null;
+  freshness: string;
+  rowsWritten: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
+type MeasurementHealthPayload = {
+  checkedAt: string;
+  sources: Record<
+    "gsc" | "ga4" | "pageSpeed",
+    {
+      capability: { available: boolean; mode?: string; missingConfiguration?: string[]; limitation?: string | null };
+      runs: { latest: MeasurementRunSummary | null; lastSuccess: MeasurementRunSummary | null; lastPartial: MeasurementRunSummary | null; lastFailure: MeasurementRunSummary | null };
+      storedCoverage: Record<string, number | string | null>;
+    }
+  >;
+};
+
+type TechnicalSnapshotPayload = {
+  canonicalUrl: string;
+  checkedAt: string;
+  evidenceState: string;
+  crawl: null | {
+    id: string;
+    finishedAt: string | null;
+    status: string;
+    healthScore: number | null;
+    verifiedIssuesFound: number | null;
+    page: {
+      statusCode: number | null;
+      canonical: string | null;
+      indexable: boolean | null;
+      hasSchema: boolean | null;
+      internalLinks: number | null;
+      imagesMissingAlt: number | null;
+      responseTimeMs: number | null;
+    };
+  };
+  internalLinks: {
+    inboundCount: number;
+    outboundCount: number;
+    brokenOutboundCount: number;
+    inbound: Array<{ sourceUrl: string; anchorText: string | null }>;
+    outbound: Array<{ targetUrl: string; anchorText: string | null; statusCode: number | null }>;
+    truncated: boolean;
+  };
+  vitals: {
+    evidenceState: string;
+    mobile: null | { evidenceState: string; checkedAt: string; lcp: number | null; inp: number | null; cls: number | null; errorMessage: string | null };
+    desktop: null | { evidenceState: string; checkedAt: string; lcp: number | null; inp: number | null; cls: number | null; errorMessage: string | null };
+  };
+};
+
+function stringMetric(value: number | null | undefined) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function pageSpeedEvidenceUrl(canonicalUrl: string, device: "mobile" | "desktop") {
+  const url = new URL("https://pagespeed.web.dev/analysis");
+  url.searchParams.set("url", canonicalUrl);
+  url.searchParams.set("form_factor", device);
+  return url.toString();
+}
+
+function groupInboundSources(
+  links: TechnicalSnapshotPayload["internalLinks"]["inbound"],
+) {
+  const sources = new Map<string, Set<string>>();
+  for (const link of links) {
+    if (!sources.has(link.sourceUrl)) sources.set(link.sourceUrl, new Set());
+    if (link.anchorText?.trim()) sources.get(link.sourceUrl)?.add(link.anchorText.trim());
+  }
+  return [...sources.entries()].map(([sourceUrl, anchors]) => ({
+    sourceUrl,
+    anchors: [...anchors].join("\n"),
+  }));
+}
+
+function technicalEvidenceFromSnapshot(
+  current: TechnicalSnapshotEvidence,
+  snapshot: TechnicalSnapshotPayload,
+  sourceUrl: string,
+): TechnicalSnapshotEvidence {
+  const preferredVitals =
+    [snapshot.vitals.mobile, snapshot.vitals.desktop].find(
+      (report) => report?.evidenceState === "available",
+    ) ?? snapshot.vitals.mobile ?? snapshot.vitals.desktop;
+  const device = preferredVitals === snapshot.vitals.desktop ? "desktop" : "mobile";
+  const cwvEvidenceState = preferredVitals?.evidenceState === "available"
+    ? "verified"
+    : preferredVitals
+      ? "partial"
+      : "missing";
+  const source: EvidenceSource = {
+    label: "CrawlSEO read-only technical snapshot",
+    url: sourceUrl,
+    checkedAt: snapshot.checkedAt,
+  };
+  const sources = current.sources.some(
+    (entry) => entry.url === source.url && entry.checkedAt === source.checkedAt,
+  )
+    ? current.sources
+    : [...current.sources, source];
+  const crawl = snapshot.crawl;
+  const brokenLinks = snapshot.internalLinks.outbound
+    .filter((link) => link.statusCode !== null && link.statusCode >= 400)
+    .map((link) => ({
+      url: link.targetUrl,
+      statusCode: stringMetric(link.statusCode),
+      anchorText: link.anchorText ?? "",
+    }));
+
+  return {
+    ...current,
+    evidenceState: ["verified", "partial", "missing"].includes(snapshot.evidenceState)
+      ? snapshot.evidenceState
+      : "partial",
+    checkedAt: snapshot.checkedAt,
+    sources,
+    notApplicableReason: "",
+    crawl: {
+      ...current.crawl,
+      crawlId: crawl?.id ?? "",
+      crawledAt: crawl?.finishedAt ?? "",
+      status: crawl?.status ?? "missing",
+      pageStatusCode: stringMetric(crawl?.page.statusCode),
+      indexable: crawl?.page.indexable ?? null,
+      canonical: crawl?.page.canonical ?? "",
+      schemaTypes: crawl?.page.hasSchema ? current.crawl.schemaTypes : "",
+      internalLinksOut: crawl ? String(snapshot.internalLinks.outboundCount) : "",
+      inboundInternalLinks: crawl ? String(snapshot.internalLinks.inboundCount) : "",
+      inboundSources: crawl ? groupInboundSources(snapshot.internalLinks.inbound) : [],
+      orphanStatus: crawl
+        ? snapshot.internalLinks.inboundCount === 0
+          ? "orphan"
+          : "not_orphan"
+        : "unknown",
+      brokenLinkStatus: crawl
+        ? snapshot.internalLinks.brokenOutboundCount > 0
+          ? "found"
+          : "none_found"
+        : "unknown",
+      brokenLinks: crawl ? brokenLinks : [],
+      missingReason: crawl
+        ? ""
+        : "No completed canonical crawl was stored when this snapshot was checked.",
+    },
+    cwv: {
+      evidenceState: cwvEvidenceState,
+      sourceUrl: preferredVitals
+        ? pageSpeedEvidenceUrl(snapshot.canonicalUrl, device)
+        : "",
+      device: preferredVitals ? device : "",
+      checkedAt: preferredVitals?.checkedAt ?? "",
+      lcp: stringMetric(preferredVitals?.lcp),
+      inp: stringMetric(preferredVitals?.inp),
+      cls: stringMetric(preferredVitals?.cls),
+      missingReason:
+        cwvEvidenceState === "verified"
+          ? ""
+          : preferredVitals?.errorMessage ??
+            "No complete stored URL-level Core Web Vitals report was available.",
+    },
+  };
+}
+
 const EMPTY_FILTERS: PageReviewFilters = {
   query: "",
   status: "",
@@ -116,6 +306,10 @@ const SECTION_LINKS = [
   ["serp", "SERP"],
   ["offer", "Offer"],
   ["eeat", "E-E-A-T"],
+  ["media", "Media"],
+  ["search-appearance", "Search appearance"],
+  ["readability", "Readability"],
+  ["technical", "Technical"],
   ["measurement", "Measurement"],
   ["decision", "Decision"],
   ["gates", "Gates"],
@@ -200,6 +394,12 @@ function clearSessionDraft(key: string) {
 
 export function PageReviewsWorkboard({ siteId, domain }: Props) {
   const [reviews, setReviews] = useState<PageReviewSummary[]>([]);
+  const [savedKeywords, setSavedKeywords] = useState<SavedKeywordOwner[] | null>(null);
+  const [savedKeywordError, setSavedKeywordError] = useState("");
+  const [measurementHealth, setMeasurementHealth] = useState<MeasurementHealthPayload | null>(null);
+  const [technicalEvidence, setTechnicalEvidence] = useState<TechnicalSnapshotPayload | null>(null);
+  const [readOnlyEvidenceLoading, setReadOnlyEvidenceLoading] = useState(false);
+  const [readOnlyEvidenceError, setReadOnlyEvidenceError] = useState("");
   const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<PageReviewRecord | null>(null);
@@ -221,6 +421,7 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
     draft: PageReviewRecord;
   } | null>(null);
   const allowNavigationRef = useRef(false);
+  const readOnlyEvidenceRequestRef = useRef(0);
 
   const loadReviews = useCallback(async () => {
     setLoading(true);
@@ -256,9 +457,83 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
     }
   }, [siteId]);
 
+  const loadSavedKeywords = useCallback(async () => {
+    setSavedKeywordError("");
+    try {
+      const response = await fetch(`/api/sites/${siteId}/saved-keywords`, {
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          payload && typeof payload === "object" && "error" in payload
+            ? String(payload.error)
+            : "Could not load SavedKeyword ownership.",
+        );
+      }
+      setSavedKeywords(normalizeSavedKeywordOwners(payload));
+    } catch (loadError) {
+      setSavedKeywords(null);
+      setSavedKeywordError(
+        loadError instanceof Error ? loadError.message : "Could not load SavedKeyword ownership.",
+      );
+    }
+  }, [siteId]);
+
+  const loadReadOnlyEvidence = useCallback(
+    async (canonicalUrl: string, signal?: AbortSignal) => {
+      const requestId = readOnlyEvidenceRequestRef.current + 1;
+      readOnlyEvidenceRequestRef.current = requestId;
+      setReadOnlyEvidenceLoading(true);
+      setReadOnlyEvidenceError("");
+      setMeasurementHealth(null);
+      setTechnicalEvidence(null);
+
+      async function fetchEvidence<T>(url: string): Promise<T> {
+        const response = await fetch(url, { cache: "no-store", signal });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(
+            payload && typeof payload === "object" && "error" in payload
+              ? String(payload.error)
+              : `Could not load read-only evidence (${response.status}).`,
+          );
+        }
+        return payload as T;
+      }
+
+      const results = await Promise.allSettled([
+        fetchEvidence<MeasurementHealthPayload>(
+          `/api/sites/${siteId}/measurement/health`,
+        ),
+        fetchEvidence<TechnicalSnapshotPayload>(
+          `/api/sites/${siteId}/technical-snapshot?canonical=${encodeURIComponent(canonicalUrl)}`,
+        ),
+      ]);
+      if (signal?.aborted || requestId !== readOnlyEvidenceRequestRef.current) return;
+
+      const [healthResult, technicalResult] = results;
+      const failures: string[] = [];
+      if (healthResult.status === "fulfilled") {
+        setMeasurementHealth(healthResult.value);
+      } else {
+        failures.push(`Measurement health: ${healthResult.reason instanceof Error ? healthResult.reason.message : "unavailable"}`);
+      }
+      if (technicalResult.status === "fulfilled") {
+        setTechnicalEvidence(technicalResult.value);
+      } else {
+        failures.push(`Technical snapshot: ${technicalResult.reason instanceof Error ? technicalResult.reason.message : "unavailable"}`);
+      }
+      setReadOnlyEvidenceError(failures.join(" "));
+      setReadOnlyEvidenceLoading(false);
+    },
+    [siteId],
+  );
+
   useEffect(() => {
     void loadReviews();
-  }, [loadReviews]);
+    void loadSavedKeywords();
+  }, [loadReviews, loadSavedKeywords]);
 
   useEffect(() => {
     if (!dirty) {
@@ -356,6 +631,7 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
         const review = normalizePageReview(
           payload && typeof payload === "object" && "review" in payload ? payload.review : payload,
         );
+        void loadReadOnlyEvidence(review.canonicalUrl, controller.signal);
         const storageKey = pageReviewDraftStorageKey(siteId, review.id);
         const storedValue = readSessionDraft(storageKey);
         const recovery = storedValue ? inspectPageReviewDraft(storedValue, review) : null;
@@ -381,7 +657,7 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
 
     void loadDetail();
     return () => controller.abort();
-  }, [detailReloadKey, selectedId, siteId]);
+  }, [detailReloadKey, loadReadOnlyEvidence, selectedId, siteId]);
 
   const clusters = useMemo(
     () =>
@@ -394,6 +670,11 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
   const filteredReviews = useMemo(
     () => reviews.filter((review) => matchesPageReviewFilters(review, filters)),
     [filters, reviews],
+  );
+
+  const ownershipCheck = useMemo(
+    () => (draft ? evaluateSavedKeywordOwnership(draft, savedKeywords) : null),
+    [draft, savedKeywords],
   );
 
   function updateField<K extends keyof PageReviewRecord>(field: K, value: PageReviewRecord[K]) {
@@ -487,6 +768,49 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
       detailIndex === index ? { ...detail, [field]: value } : detail,
     );
     updateField("eeatDetails", eeatDetails);
+  }
+
+  function updateMediaAccuracy(value: MediaAccuracyEvidence) {
+    updateField("mediaAccuracy", value);
+  }
+
+  function updateSearchAppearance(value: SearchAppearanceEvidence) {
+    updateField("searchAppearance", value);
+  }
+
+  function updateReadability(value: ReadabilityUserFriendlinessEvidence) {
+    updateField("readabilityUserFriendliness", value);
+  }
+
+  function updateTechnicalSnapshot(value: TechnicalSnapshotEvidence) {
+    updateField("technicalSnapshot", value);
+  }
+
+  function copyReadOnlyTechnicalEvidence() {
+    if (!draft || !technicalEvidence) return;
+    if (technicalEvidence.canonicalUrl !== draft.canonicalUrl) {
+      setReadOnlyEvidenceError(
+        "The loaded technical snapshot belongs to another canonical. Refresh this page before copying.",
+      );
+      return;
+    }
+    const endpoint = new URL(
+      `/api/sites/${siteId}/technical-snapshot?canonical=${encodeURIComponent(draft.canonicalUrl)}`,
+      window.location.href,
+    ).toString();
+    setDraft({
+      ...draft,
+      technicalSnapshot: technicalEvidenceFromSnapshot(
+        draft.technicalSnapshot,
+        technicalEvidence,
+        endpoint,
+      ),
+    });
+    setDirty(true);
+    setValidationErrors([]);
+    setNotice(
+      "Copied the read-only technical values into this unsaved review. Check the evidence state, reviewer, finding, sources, and limitations before saving; nothing was saved automatically.",
+    );
   }
 
   function updateKeywordPlanner(field: keyof KeywordPlannerEvidence, value: string) {
@@ -752,7 +1076,7 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
 
   async function saveDraft() {
     if (!draft) return;
-    const errors = validatePageReview(draft);
+    const errors = validatePageReview(draft, ownershipCheck ?? undefined);
     setValidationErrors(errors);
     if (errors.length > 0) return;
 
@@ -1059,6 +1383,45 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
                 </EditorSection>
 
                 <EditorSection id="keywords" index="02" title="Keyword ownership" description="One intent owner, or a clear reason no keyword applies.">
+                  {ownershipCheck && ownershipCheck.status !== "not_applicable" && (
+                    <div
+                      role={ownershipCheck.status === "matched" ? "status" : "alert"}
+                      className={cn(
+                        "mb-5 border-l-2 px-4 py-3 text-sm",
+                        ownershipCheck.status === "matched"
+                          ? "border-signal bg-signal-muted text-signal"
+                          : "border-destructive bg-destructive/10 text-destructive",
+                      )}
+                    >
+                      <div className="flex items-start gap-2">
+                        {ownershipCheck.status === "matched" ? (
+                          <Check className="mt-0.5 size-4 shrink-0" />
+                        ) : (
+                          <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                        )}
+                        <div>
+                          <p className="font-medium">{ownershipCheck.message}</p>
+                          <p className="mt-1 break-all text-xs opacity-90">
+                            Expected: {ownershipCheck.expectedOwner || "not recorded"}
+                            {ownershipCheck.savedOwner ? ` · SavedKeyword: ${ownershipCheck.savedOwner}` : ""}
+                          </p>
+                          {ownershipCheck.status !== "matched" && (
+                            <p className="mt-1 text-xs">
+                              Completion is blocked until this is reconciled.{" "}
+                              <a className="font-medium underline" href={`/sites/${siteId}/saved-keywords`}>
+                                Open Saved Keywords
+                              </a>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {savedKeywordError && (
+                    <p role="alert" className="mb-5 border-l-2 border-destructive bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                      {savedKeywordError} Completion cannot be reconciled until SavedKeyword ownership loads.
+                    </p>
+                  )}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <SelectField label="Ownership decision" value={draft.keywordOwner} options={KEYWORD_OWNERSHIP_OPTIONS} onChange={(value) => updateField("keywordOwner", value)} />
                     <TextField label="Primary query" value={draft.primaryQuery} onChange={(value) => updateField("primaryQuery", value)} placeholder="Exact reviewed query" />
@@ -1324,12 +1687,41 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
                   </div>
                 </EditorSection>
 
+                <EditorSection id="media" index="09" title="Media accuracy" description="Verify every meaningful asset, its source and rights, and its desktop/mobile rendering.">
+                  <MediaAccuracyEditor value={draft.mediaAccuracy} onChange={updateMediaAccuracy} />
+                </EditorSection>
+
+                <EditorSection id="search-appearance" index="10" title="Search appearance" description="Compare rendered metadata with Google’s observed title/snippet and current competitor patterns.">
+                  <SearchAppearanceEditor value={draft.searchAppearance} onChange={updateSearchAppearance} />
+                </EditorSection>
+
+                <EditorSection id="readability" index="11" title="Readability and user-friendliness" description="Check whether a visitor can understand the answer and complete the page’s task on desktop and mobile.">
+                  <ReadabilityEditor value={draft.readabilityUserFriendliness} onChange={updateReadability} />
+                </EditorSection>
+
+                <EditorSection id="technical" index="12" title="Technical snapshot" description="Record the latest crawl, internal-link evidence, broken-link state, and available Core Web Vitals without turning unknowns into zero.">
+                  <ReadOnlyTechnicalEvidenceCard
+                    value={technicalEvidence}
+                    loading={readOnlyEvidenceLoading}
+                    error={readOnlyEvidenceError}
+                    onRefresh={() => void loadReadOnlyEvidence(draft.canonicalUrl)}
+                    onCopy={copyReadOnlyTechnicalEvidence}
+                  />
+                  <TechnicalSnapshotEditor value={draft.technicalSnapshot} onChange={updateTechnicalSnapshot} />
+                </EditorSection>
+
                 <EditorSection
                   id="measurement"
-                  index="09"
+                  index="13"
                   title="Measurement plan"
                   description="Freeze the page’s real starting point and success rule before an approved change. Blank metrics mean unknown, not zero."
                 >
+                  <MeasurementHealthCard
+                    value={measurementHealth}
+                    loading={readOnlyEvidenceLoading}
+                    error={readOnlyEvidenceError}
+                    onRefresh={() => void loadReadOnlyEvidence(draft.canonicalUrl)}
+                  />
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <SelectField
                       label="Plan evidence state"
@@ -1550,7 +1942,7 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
                   </div>
                 </EditorSection>
 
-                <EditorSection id="decision" index="10" title="Decision and change control" description="Choose the change the evidence supports. It may be focused or comprehensive. Saving does not publish it.">
+                <EditorSection id="decision" index="14" title="Decision and change control" description="Choose the change the evidence supports. It may be focused or comprehensive. Saving does not publish it.">
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <SelectField label="Decision" value={draft.decisionAction} options={DECISION_STATE_OPTIONS} onChange={(value) => updateField("decisionAction", value)} />
                     <SelectField label="Change state" value={draft.decisionChangeState} options={CHANGE_STATE_OPTIONS} onChange={(value) => updateField("decisionChangeState", value)} />
@@ -1616,7 +2008,7 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
                   </div>
                 </EditorSection>
 
-                <EditorSection id="gates" index="11" title="Day 7 / 28 / 56 gates" description="These are manual outcome checks, not scheduled jobs.">
+                <EditorSection id="gates" index="15" title="Day 7 / 28 / 56 gates" description="These are manual outcome checks, not scheduled jobs.">
                   <div className="divide-y divide-border border-y border-border">
                     <GateEditor label="Day 7" gate={draft.day7} onChange={(field, value) => updateGate("day7", field, value)} />
                     <GateEditor label="Day 28" gate={draft.day28} onChange={(field, value) => updateGate("day28", field, value)} />
@@ -1624,7 +2016,7 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
                   </div>
                 </EditorSection>
 
-                <EditorSection id="notes" index="12" title="Manual notes and timestamps" description="Keep the human review trail clear and dated.">
+                <EditorSection id="notes" index="16" title="Manual notes and timestamps" description="Keep the human review trail clear and dated.">
                   <TextArea label="Manual notes" value={draft.manualNotes} onChange={(value) => updateField("manualNotes", value)} />
                   <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <TextField label="First reviewed at" type="datetime-local" value={toLocalDateTime(draft.firstReviewedAt)} onChange={(value) => updateField("firstReviewedAt", value)} />
@@ -1647,6 +2039,588 @@ export function PageReviewsWorkboard({ siteId, domain }: Props) {
         </main>
       </div>
     </div>
+  );
+}
+
+function evidenceDate(value: string | null | undefined) {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function MeasurementHealthCard({
+  value,
+  loading,
+  error,
+  onRefresh,
+}: {
+  value: MeasurementHealthPayload | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+}) {
+  const sourceLabels: Record<keyof MeasurementHealthPayload["sources"], string> = {
+    gsc: "Search Console",
+    ga4: "GA4 Data API",
+    pageSpeed: "PageSpeed / CWV",
+  };
+
+  return (
+    <div className="mb-7 rounded-xl border border-primary/25 bg-primary/[0.035] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Read-only measurement health</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            Live capability, run-ledger, and stored-coverage evidence. This display never writes baseline values or saves this review.
+          </p>
+        </div>
+        <Button type="button" variant="outline" size="xs" onClick={onRefresh} disabled={loading}>
+          {loading ? <Loader2 className="animate-spin" /> : <RotateCcw />} Refresh
+        </Button>
+      </div>
+      {error && (
+        <p className="mt-3 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      {!value ? (
+        <p className="mt-4 text-sm text-muted-foreground">
+          {loading ? "Loading current measurement health…" : "No measurement-health response is available."}
+        </p>
+      ) : (
+        <>
+          <p className="mt-3 text-[11px] text-muted-foreground">Checked {evidenceDate(value.checkedAt)}</p>
+          <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            {(Object.keys(sourceLabels) as Array<keyof typeof sourceLabels>).map((key) => {
+              const source = value.sources[key];
+              const lastRun = source.runs.lastSuccess ?? source.runs.latest;
+              return (
+                <div key={key} className="rounded-lg border border-border bg-background p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium text-foreground">{sourceLabels[key]}</p>
+                    <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", source.capability.available ? "bg-signal-muted text-signal" : "bg-warning/10 text-warning") }>
+                      {source.capability.available ? "Available" : "Configuration needed"}
+                    </span>
+                  </div>
+                  {source.capability.missingConfiguration?.length ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Missing: {source.capability.missingConfiguration.join(", ")}
+                    </p>
+                  ) : source.capability.limitation ? (
+                    <p className="mt-2 text-xs text-muted-foreground">{source.capability.limitation}</p>
+                  ) : null}
+                  <dl className="mt-3 space-y-1 text-xs">
+                    <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Latest useful run</dt><dd className="text-right text-foreground">{lastRun ? `${humanize(lastRun.status)} · ${evidenceDate(lastRun.finishedAt ?? lastRun.startedAt)}` : "None recorded"}</dd></div>
+                    {Object.entries(source.storedCoverage).map(([label, coverage]) => (
+                      <div key={label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{humanize(label)}</dt><dd className="text-right text-foreground">{coverage ?? "Unknown"}</dd></div>
+                    ))}
+                  </dl>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ReadOnlyTechnicalEvidenceCard({
+  value,
+  loading,
+  error,
+  onRefresh,
+  onCopy,
+}: {
+  value: TechnicalSnapshotPayload | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  onCopy: () => void;
+}) {
+  const mobile = value?.vitals.mobile;
+  const desktop = value?.vitals.desktop;
+  return (
+    <div className="mb-7 rounded-xl border border-primary/25 bg-primary/[0.035] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Latest read-only CrawlSEO evidence</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            Loaded from the current canonical crawl, internal-link graph, and stored PageSpeed reports. It does not overwrite or save the review.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="xs" onClick={onRefresh} disabled={loading}>
+            {loading ? <Loader2 className="animate-spin" /> : <RotateCcw />} Refresh
+          </Button>
+          <Button type="button" size="xs" onClick={onCopy} disabled={!value || loading}>
+            Copy into unsaved review
+          </Button>
+        </div>
+      </div>
+      {error && (
+        <p className="mt-3 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      {!value ? (
+        <p className="mt-4 text-sm text-muted-foreground">
+          {loading ? "Loading current technical evidence…" : "No technical-snapshot response is available."}
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <EvidenceDatum label="Snapshot" value={`${humanize(value.evidenceState)} · ${evidenceDate(value.checkedAt)}`} />
+            <EvidenceDatum label="Crawl" value={value.crawl ? `${humanize(value.crawl.status)} · HTTP ${value.crawl.page.statusCode ?? "unknown"}` : "No completed canonical crawl"} />
+            <EvidenceDatum label="Indexability" value={value.crawl?.page.indexable === null || value.crawl?.page.indexable === undefined ? "Unknown" : value.crawl.page.indexable ? "Indexable" : "Not indexable"} />
+            <EvidenceDatum label="Internal links" value={`${value.internalLinks.inboundCount} inbound · ${value.internalLinks.outboundCount} outbound · ${value.internalLinks.brokenOutboundCount} broken`} />
+            <EvidenceDatum label="Mobile CWV" value={mobile ? `${humanize(mobile.evidenceState)} · LCP ${mobile.lcp ?? "?"}s · INP ${mobile.inp ?? "?"}ms · CLS ${mobile.cls ?? "?"}` : "No stored report"} />
+            <EvidenceDatum label="Desktop CWV" value={desktop ? `${humanize(desktop.evidenceState)} · LCP ${desktop.lcp ?? "?"}s · INP ${desktop.inp ?? "?"}ms · CLS ${desktop.cls ?? "?"}` : "No stored report"} />
+            <EvidenceDatum label="Schema observed" value={value.crawl?.page.hasSchema === null || value.crawl?.page.hasSchema === undefined ? "Unknown" : value.crawl.page.hasSchema ? "Yes; types still require review" : "No"} />
+            <EvidenceDatum label="Images missing alt" value={value.crawl ? stringMetric(value.crawl.page.imagesMissingAlt) || "Unknown" : "Unknown"} />
+          </div>
+          {value.internalLinks.truncated && (
+            <p className="mt-3 text-xs text-warning">The displayed link sample is truncated; the saved counts remain the full snapshot counts.</p>
+          )}
+          <p className="mt-3 text-xs text-muted-foreground">
+            Copying is explicit and only changes the browser draft. Reviewer, finding, limitations, and schema types still require human confirmation.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function EvidenceDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xs leading-5 text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function EvidenceHeaderEditor({
+  value,
+  onChange,
+}: {
+  value: EvidenceGroupFields;
+  onChange: (patch: Partial<EvidenceGroupFields>) => void;
+}) {
+  function updateSource(index: number, field: keyof EvidenceSource, nextValue: string) {
+    onChange({
+      sources: value.sources.map((source, sourceIndex) =>
+        sourceIndex === index ? { ...source, [field]: nextValue } : source,
+      ),
+    });
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <SelectField
+          label="Evidence state"
+          value={value.evidenceState}
+          options={EVIDENCE_STATE_OPTIONS}
+          onChange={(evidenceState) =>
+            onChange({
+              evidenceState,
+              notApplicableReason:
+                evidenceState === "not_applicable" ? value.notApplicableReason : "",
+            })
+          }
+        />
+        <TextField
+          label="Checked at"
+          type="datetime-local"
+          value={toLocalDateTime(value.checkedAt)}
+          onChange={(checkedAt) => onChange({ checkedAt })}
+        />
+        <TextField
+          label="Reviewer or team"
+          value={value.reviewer}
+          onChange={(reviewer) => onChange({ reviewer })}
+          placeholder="Real reviewer or transparent team"
+        />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <TextArea
+          label="Finding"
+          value={value.finding}
+          onChange={(finding) => onChange({ finding })}
+          hint="State what the evidence supports, including issues that still need work."
+          compact
+        />
+        <TextArea
+          label="Limitation"
+          value={value.limitation}
+          onChange={(limitation) => onChange({ limitation })}
+          hint="Required for partial evidence. Unknown is not zero and not a pass."
+          compact
+        />
+      </div>
+      {value.evidenceState === "not_applicable" && (
+        <TextArea
+          label="Why this evidence is not applicable"
+          value={value.notApplicableReason}
+          onChange={(notApplicableReason) => onChange({ notApplicableReason })}
+          required
+          compact
+        />
+      )}
+      <div className="border-t border-border pt-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Dated sources</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Verified and partial evidence needs at least one source a person actually checked.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onChange({ sources: [...value.sources, emptyEvidenceSource()] })}
+          >
+            <Plus /> Add source
+          </Button>
+        </div>
+        {value.sources.length === 0 ? (
+          <p className="mt-3 border border-dashed border-border px-4 py-4 text-sm text-muted-foreground">
+            No dated source recorded.
+          </p>
+        ) : (
+          <div className="mt-3 divide-y divide-border border-y border-border">
+            {value.sources.map((source, index) => (
+              <div key={index} className="grid gap-3 py-4 lg:grid-cols-[1fr_2fr_220px_auto] lg:items-end">
+                <TextField label="Source label" value={source.label} onChange={(next) => updateSource(index, "label", next)} />
+                <TextField label="Source URL" value={source.url} onChange={(next) => updateSource(index, "url", next)} />
+                <TextField label="Checked at" type="datetime-local" value={toLocalDateTime(source.checkedAt)} onChange={(next) => updateSource(index, "checkedAt", next)} />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => onChange({ sources: value.sources.filter((_, sourceIndex) => sourceIndex !== index) })}
+                >
+                  <Trash2 /> Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MediaAccuracyEditor({
+  value,
+  onChange,
+}: {
+  value: MediaAccuracyEvidence;
+  onChange: (value: MediaAccuracyEvidence) => void;
+}) {
+  function updateAsset(index: number, field: keyof MediaAssetEvidence, nextValue: string) {
+    onChange({
+      ...value,
+      assets: value.assets.map((asset, assetIndex) =>
+        assetIndex === index ? { ...asset, [field]: nextValue } : asset,
+      ),
+    });
+  }
+
+  return (
+    <div className="space-y-7">
+      <EvidenceHeaderEditor value={value} onChange={(patch) => onChange({ ...value, ...patch })} />
+      <div className="border-t border-border pt-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="w-full max-w-xs">
+            <NullableBooleanField
+              label="Media inventory complete"
+              value={value.inventoryComplete}
+              onChange={(inventoryComplete) => onChange({ ...value, inventoryComplete })}
+            />
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onChange({ ...value, assets: [...value.assets, emptyMediaAssetEvidence()] })}
+          >
+            <Plus /> Add media asset
+          </Button>
+        </div>
+        {value.assets.length === 0 ? (
+          <p className="mt-4 border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
+            No media asset is recorded. Use not applicable only after confirming the page makes no meaningful image, map, chart, diagram, thumbnail, or social-preview claim.
+          </p>
+        ) : (
+          <div className="mt-4 divide-y divide-border border-y border-border">
+            {value.assets.map((asset, index) => (
+              <div key={index} className="py-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <span className="font-data text-xs font-semibold text-primary">Asset {String(index + 1).padStart(2, "0")}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => onChange({ ...value, assets: value.assets.filter((_, assetIndex) => assetIndex !== index) })}
+                  >
+                    <Trash2 /> Remove
+                  </Button>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <TextField label="Placement" value={asset.placement} onChange={(next) => updateAsset(index, "placement", next)} placeholder="Hero, inline map, social preview" />
+                  <div className="sm:col-span-1 lg:col-span-3"><TextField label="Rendered asset URL" value={asset.assetUrl} onChange={(next) => updateAsset(index, "assetUrl", next)} /></div>
+                  <div className="sm:col-span-2"><TextField label="Source URL" value={asset.sourceUrl} onChange={(next) => updateAsset(index, "sourceUrl", next)} /></div>
+                  <TextField label="Creator" value={asset.creator} onChange={(next) => updateAsset(index, "creator", next)} />
+                  <TextField label="Capture / publication date" value={asset.capturedAt} onChange={(next) => updateAsset(index, "capturedAt", next)} />
+                  <TextArea label="Subject / location evidence" value={asset.subjectLocation} onChange={(next) => updateAsset(index, "subjectLocation", next)} compact />
+                  <TextArea label="License or permission" value={asset.licenseOrPermission} onChange={(next) => updateAsset(index, "licenseOrPermission", next)} compact />
+                  <TextArea label="Required attribution" value={asset.attribution} onChange={(next) => updateAsset(index, "attribution", next)} compact />
+                  <TextArea label="Asset limitation" value={asset.limitation} onChange={(next) => updateAsset(index, "limitation", next)} compact />
+                  <TextArea label="Alt text" value={asset.altText} onChange={(next) => updateAsset(index, "altText", next)} compact />
+                  <TextArea label="Caption" value={asset.caption} onChange={(next) => updateAsset(index, "caption", next)} compact />
+                  <SelectField label="Accuracy" value={asset.accuracyStatus} options={AUDIT_CHECK_STATUS_OPTIONS} onChange={(next) => updateAsset(index, "accuracyStatus", next)} />
+                  <SelectField label="Relevance" value={asset.relevanceStatus} options={AUDIT_CHECK_STATUS_OPTIONS} onChange={(next) => updateAsset(index, "relevanceStatus", next)} />
+                  <SelectField label="Desktop render" value={asset.desktopRenderStatus} options={AUDIT_CHECK_STATUS_OPTIONS} onChange={(next) => updateAsset(index, "desktopRenderStatus", next)} />
+                  <SelectField label="Mobile render" value={asset.mobileRenderStatus} options={AUDIT_CHECK_STATUS_OPTIONS} onChange={(next) => updateAsset(index, "mobileRenderStatus", next)} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SearchAppearanceEditor({
+  value,
+  onChange,
+}: {
+  value: SearchAppearanceEvidence;
+  onChange: (value: SearchAppearanceEvidence) => void;
+}) {
+  function updateRendered(field: keyof SearchAppearanceEvidence["rendered"], nextValue: string) {
+    onChange({ ...value, rendered: { ...value.rendered, [field]: nextValue } });
+  }
+  function updateGoogle(field: keyof SearchAppearanceEvidence["google"], nextValue: string | boolean | null) {
+    onChange({ ...value, google: { ...value.google, [field]: nextValue } });
+  }
+  function updatePattern(index: number, field: keyof SearchAppearanceEvidence["competitorPatterns"][number], nextValue: string) {
+    onChange({
+      ...value,
+      competitorPatterns: value.competitorPatterns.map((pattern, patternIndex) =>
+        patternIndex === index ? { ...pattern, [field]: nextValue } : pattern,
+      ),
+    });
+  }
+
+  return (
+    <div className="space-y-7">
+      <EvidenceHeaderEditor value={value} onChange={(patch) => onChange({ ...value, ...patch })} />
+      <div className="border-t border-border pt-5">
+        <h3 className="text-sm font-semibold text-foreground">Rendered page and social metadata</h3>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <TextField label="Document title" value={value.rendered.title} onChange={(next) => updateRendered("title", next)} />
+          <TextField label="Meta description" value={value.rendered.metaDescription} onChange={(next) => updateRendered("metaDescription", next)} />
+          <TextField label="Canonical" value={value.rendered.canonical} onChange={(next) => updateRendered("canonical", next)} />
+          <TextField label="Social image" value={value.rendered.socialImage} onChange={(next) => updateRendered("socialImage", next)} />
+          <TextField label="Open Graph title" value={value.rendered.openGraphTitle} onChange={(next) => updateRendered("openGraphTitle", next)} />
+          <TextField label="Open Graph description" value={value.rendered.openGraphDescription} onChange={(next) => updateRendered("openGraphDescription", next)} />
+          <TextField label="Twitter title" value={value.rendered.twitterTitle} onChange={(next) => updateRendered("twitterTitle", next)} />
+          <TextField label="Twitter description" value={value.rendered.twitterDescription} onChange={(next) => updateRendered("twitterDescription", next)} />
+        </div>
+      </div>
+      <div className="border-t border-border pt-5">
+        <h3 className="text-sm font-semibold text-foreground">Observed Google result</h3>
+        <p className="mt-1 text-xs text-muted-foreground">Google controls and may vary the displayed title and snippet. Record not observed or partial evidence honestly.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <TextField label="Exact query" value={value.google.query} onChange={(next) => updateGoogle("query", next)} />
+          <TextField label="Locale" value={value.google.locale} onChange={(next) => updateGoogle("locale", next)} />
+          <SelectField label="Device" value={value.google.device} options={["", ...SERP_DEVICE_OPTIONS]} onChange={(next) => updateGoogle("device", next)} />
+          <SelectField label="Snippet source" value={value.google.snippetSource} options={["", ...GOOGLE_SNIPPET_SOURCE_OPTIONS]} onChange={(next) => updateGoogle("snippetSource", next)} />
+          <TextField label="Displayed Google title" value={value.google.displayedTitle} onChange={(next) => updateGoogle("displayedTitle", next)} />
+          <TextField label="Displayed Google snippet" value={value.google.displayedSnippet} onChange={(next) => updateGoogle("displayedSnippet", next)} />
+          <NullableBooleanField label="Google rewrote title" value={value.google.titleRewrite} onChange={(next) => updateGoogle("titleRewrite", next)} />
+          <SelectField label="Reprocessing status" value={value.google.reprocessingStatus} options={GOOGLE_REPROCESSING_STATUS_OPTIONS} onChange={(next) => updateGoogle("reprocessingStatus", next)} />
+          <div className="sm:col-span-2 lg:col-span-4"><TextArea label="Selected body passage" value={value.google.bodyPassage} onChange={(next) => updateGoogle("bodyPassage", next)} hint="Use only when Google selected a body passage; preserve the exact observed text." compact /></div>
+        </div>
+      </div>
+      <div className="border-t border-border pt-5">
+        <div className="flex items-start justify-between gap-3">
+          <div><h3 className="text-sm font-semibold text-foreground">Competitor snippet patterns</h3><p className="mt-1 text-xs text-muted-foreground">Describe patterns without copying competitor language.</p></div>
+          <Button type="button" variant="outline" size="sm" onClick={() => onChange({ ...value, competitorPatterns: [...value.competitorPatterns, { url: "", title: "", snippet: "", pattern: "" }] })}><Plus /> Add pattern</Button>
+        </div>
+        <div className="mt-3 divide-y divide-border border-y border-border">
+          {value.competitorPatterns.map((pattern, index) => (
+            <div key={index} className="grid gap-3 py-4 lg:grid-cols-[1.5fr_1fr_1.5fr_1.5fr_auto] lg:items-end">
+              <TextField label="URL" value={pattern.url} onChange={(next) => updatePattern(index, "url", next)} />
+              <TextField label="Title" value={pattern.title} onChange={(next) => updatePattern(index, "title", next)} />
+              <TextArea label="Snippet" value={pattern.snippet} onChange={(next) => updatePattern(index, "snippet", next)} compact />
+              <TextArea label="Pattern" value={pattern.pattern} onChange={(next) => updatePattern(index, "pattern", next)} compact />
+              <Button type="button" variant="ghost" size="xs" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onChange({ ...value, competitorPatterns: value.competitorPatterns.filter((_, patternIndex) => patternIndex !== index) })}><Trash2 /> Remove</Button>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
+        <TextField label="Proposed title" value={value.proposedTitle} onChange={(proposedTitle) => onChange({ ...value, proposedTitle })} placeholder="Blank means no proposed change" />
+        <TextField label="Proposed meta description" value={value.proposedMetaDescription} onChange={(proposedMetaDescription) => onChange({ ...value, proposedMetaDescription })} placeholder="Blank means no proposed change" />
+      </div>
+    </div>
+  );
+}
+
+const READABILITY_LABELS: Record<(typeof READABILITY_CHECK_KEYS)[number], string> = {
+  answerFirst: "Answer first",
+  plainLanguage: "Plain language",
+  informationHierarchy: "Information hierarchy",
+  scannability: "Scannability",
+  jargonExplained: "Jargon explained",
+  actionClarity: "Action clarity",
+  accessibility: "Accessibility",
+  desktopUsability: "Desktop usability",
+  mobileUsability: "Mobile usability",
+};
+
+function ReadabilityEditor({
+  value,
+  onChange,
+}: {
+  value: ReadabilityUserFriendlinessEvidence;
+  onChange: (value: ReadabilityUserFriendlinessEvidence) => void;
+}) {
+  return (
+    <div className="space-y-7">
+      <EvidenceHeaderEditor value={value} onChange={(patch) => onChange({ ...value, ...patch })} />
+      <div className="grid gap-4 border-t border-border pt-5 lg:grid-cols-3">
+        {READABILITY_CHECK_KEYS.map((key) => (
+          <div key={key} className="rounded-lg border border-border p-4">
+            <SelectField
+              label={READABILITY_LABELS[key]}
+              value={value.checks[key].status}
+              options={AUDIT_CHECK_STATUS_OPTIONS}
+              onChange={(status) => onChange({ ...value, checks: { ...value.checks, [key]: { ...value.checks[key], status } } })}
+            />
+            <div className="mt-3">
+              <TextArea
+                label="Finding"
+                value={value.checks[key].finding}
+                onChange={(finding) => onChange({ ...value, checks: { ...value.checks, [key]: { ...value.checks[key], finding } } })}
+                hint="A pass still needs observed evidence."
+                compact
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TechnicalSnapshotEditor({
+  value,
+  onChange,
+}: {
+  value: TechnicalSnapshotEvidence;
+  onChange: (value: TechnicalSnapshotEvidence) => void;
+}) {
+  function updateCrawl(field: keyof TechnicalSnapshotEvidence["crawl"], nextValue: unknown) {
+    onChange({ ...value, crawl: { ...value.crawl, [field]: nextValue } });
+  }
+  function updateCwv(field: keyof TechnicalSnapshotEvidence["cwv"], nextValue: string) {
+    onChange({ ...value, cwv: { ...value.cwv, [field]: nextValue } });
+  }
+
+  return (
+    <div className="space-y-7">
+      <EvidenceHeaderEditor value={value} onChange={(patch) => onChange({ ...value, ...patch })} />
+      <div className="border-t border-border pt-5">
+        <h3 className="text-sm font-semibold text-foreground">Latest crawl and internal links</h3>
+        <p className="mt-1 text-xs text-muted-foreground">Use the latest canonical-only CrawlSEO evidence. This panel never guesses missing field data.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <TextField label="Crawl ID" value={value.crawl.crawlId} onChange={(next) => updateCrawl("crawlId", next)} />
+          <TextField label="Crawled at" type="datetime-local" value={toLocalDateTime(value.crawl.crawledAt)} onChange={(next) => updateCrawl("crawledAt", next)} />
+          <SelectField label="Crawl status" value={value.crawl.status} options={TECHNICAL_CRAWL_STATUS_OPTIONS} onChange={(next) => updateCrawl("status", next)} />
+          <TextField label="HTTP status" type="number" value={value.crawl.pageStatusCode} onChange={(next) => updateCrawl("pageStatusCode", next)} />
+          <NullableBooleanField label="Indexable" value={value.crawl.indexable} onChange={(next) => updateCrawl("indexable", next)} />
+          <div className="sm:col-span-1 lg:col-span-3"><TextField label="Crawl canonical" value={value.crawl.canonical} onChange={(next) => updateCrawl("canonical", next)} /></div>
+          <TextArea label="Schema types" value={value.crawl.schemaTypes} onChange={(next) => updateCrawl("schemaTypes", next)} hint="One per line; blank can mean none observed only when the finding says so." compact />
+          <TextField label="Internal links out" type="number" min="0" value={value.crawl.internalLinksOut} onChange={(next) => updateCrawl("internalLinksOut", next)} placeholder="Blank = unknown" />
+          <TextField label="Inbound internal links" type="number" min="0" value={value.crawl.inboundInternalLinks} onChange={(next) => updateCrawl("inboundInternalLinks", next)} placeholder="Blank = unknown" />
+          <SelectField label="Orphan status" value={value.crawl.orphanStatus} options={ORPHAN_STATUS_OPTIONS} onChange={(next) => updateCrawl("orphanStatus", next)} />
+          <SelectField label="Broken-link status" value={value.crawl.brokenLinkStatus} options={BROKEN_LINK_STATUS_OPTIONS} onChange={(next) => updateCrawl("brokenLinkStatus", next)} />
+          <div className="sm:col-span-2 lg:col-span-3"><TextArea label="Missing crawl evidence reason" value={value.crawl.missingReason} onChange={(next) => updateCrawl("missingReason", next)} hint="Required for partial technical evidence when crawl facts are unavailable." compact /></div>
+        </div>
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
+          <RepeatingInternalLinks value={value} onChange={onChange} />
+          <RepeatingBrokenLinks value={value} onChange={onChange} />
+        </div>
+      </div>
+      <div className="border-t border-border pt-5">
+        <h3 className="text-sm font-semibold text-foreground">Core Web Vitals</h3>
+        <p className="mt-1 text-xs text-muted-foreground">Record URL-level field evidence when available. A quota failure or absent CrUX row is partial/missing evidence, never a passing score.</p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <SelectField label="CWV evidence state" value={value.cwv.evidenceState} options={EVIDENCE_STATE_OPTIONS} onChange={(next) => updateCwv("evidenceState", next)} />
+          <SelectField label="Device" value={value.cwv.device} options={["", ...SERP_DEVICE_OPTIONS]} onChange={(next) => updateCwv("device", next)} />
+          <TextField label="Checked at" type="datetime-local" value={toLocalDateTime(value.cwv.checkedAt)} onChange={(next) => updateCwv("checkedAt", next)} />
+          <TextField label="Source URL" value={value.cwv.sourceUrl} onChange={(next) => updateCwv("sourceUrl", next)} />
+          <TextField label="LCP (seconds)" type="number" step="any" min="0" value={value.cwv.lcp} onChange={(next) => updateCwv("lcp", next)} placeholder="Blank = unknown" />
+          <TextField label="INP (ms)" type="number" min="0" value={value.cwv.inp} onChange={(next) => updateCwv("inp", next)} placeholder="Blank = unknown" />
+          <TextField label="CLS" type="number" step="any" min="0" value={value.cwv.cls} onChange={(next) => updateCwv("cls", next)} placeholder="Blank = unknown" />
+          <TextArea label="Missing CWV reason" value={value.cwv.missingReason} onChange={(next) => updateCwv("missingReason", next)} hint="Required when complete URL-level field data is unavailable." compact />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RepeatingInternalLinks({ value, onChange }: { value: TechnicalSnapshotEvidence; onChange: (value: TechnicalSnapshotEvidence) => void }) {
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-3"><div><h4 className="text-sm font-medium text-foreground">Inbound sources and anchors</h4><p className="mt-1 text-xs text-muted-foreground">Evidence for current internal-link support.</p></div><Button type="button" variant="outline" size="xs" onClick={() => onChange({ ...value, crawl: { ...value.crawl, inboundSources: [...value.crawl.inboundSources, { sourceUrl: "", anchors: "" }] } })}><Plus /> Add</Button></div>
+      <div className="mt-3 space-y-3">
+        {value.crawl.inboundSources.map((source, index) => (
+          <div key={index} className="rounded-lg border border-border p-3">
+            <TextField label="Source canonical" value={source.sourceUrl} onChange={(sourceUrl) => onChange({ ...value, crawl: { ...value.crawl, inboundSources: value.crawl.inboundSources.map((entry, entryIndex) => entryIndex === index ? { ...entry, sourceUrl } : entry) } })} />
+            <div className="mt-3"><TextArea label="Anchors" value={source.anchors} onChange={(anchors) => onChange({ ...value, crawl: { ...value.crawl, inboundSources: value.crawl.inboundSources.map((entry, entryIndex) => entryIndex === index ? { ...entry, anchors } : entry) } })} hint="One per line" compact /></div>
+            <Button type="button" variant="ghost" size="xs" className="mt-2 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onChange({ ...value, crawl: { ...value.crawl, inboundSources: value.crawl.inboundSources.filter((_, entryIndex) => entryIndex !== index) } })}><Trash2 /> Remove</Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RepeatingBrokenLinks({ value, onChange }: { value: TechnicalSnapshotEvidence; onChange: (value: TechnicalSnapshotEvidence) => void }) {
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-3"><div><h4 className="text-sm font-medium text-foreground">Broken links found</h4><p className="mt-1 text-xs text-muted-foreground">List exact URLs only when the status is found.</p></div><Button type="button" variant="outline" size="xs" onClick={() => onChange({ ...value, crawl: { ...value.crawl, brokenLinks: [...value.crawl.brokenLinks, { url: "", statusCode: "", anchorText: "" }] } })}><Plus /> Add</Button></div>
+      <div className="mt-3 space-y-3">
+        {value.crawl.brokenLinks.map((link, index) => (
+          <div key={index} className="rounded-lg border border-border p-3">
+            <TextField label="Broken URL" value={link.url} onChange={(url) => onChange({ ...value, crawl: { ...value.crawl, brokenLinks: value.crawl.brokenLinks.map((entry, entryIndex) => entryIndex === index ? { ...entry, url } : entry) } })} />
+            <div className="mt-3 grid gap-3 sm:grid-cols-2"><TextField label="Status code" type="number" value={link.statusCode} onChange={(statusCode) => onChange({ ...value, crawl: { ...value.crawl, brokenLinks: value.crawl.brokenLinks.map((entry, entryIndex) => entryIndex === index ? { ...entry, statusCode } : entry) } })} /><TextField label="Anchor text" value={link.anchorText} onChange={(anchorText) => onChange({ ...value, crawl: { ...value.crawl, brokenLinks: value.crawl.brokenLinks.map((entry, entryIndex) => entryIndex === index ? { ...entry, anchorText } : entry) } })} /></div>
+            <Button type="button" variant="ghost" size="xs" className="mt-2 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onChange({ ...value, crawl: { ...value.crawl, brokenLinks: value.crawl.brokenLinks.filter((_, entryIndex) => entryIndex !== index) } })}><Trash2 /> Remove</Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NullableBooleanField({ label, value, onChange }: { label: string; value: boolean | null; onChange: (value: boolean | null) => void }) {
+  return (
+    <SelectField
+      label={label}
+      value={value === null ? "" : String(value)}
+      options={["", "true", "false"]}
+      onChange={(next) => onChange(next === "" ? null : next === "true")}
+    />
   );
 }
 

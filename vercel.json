@@ -8,6 +8,12 @@
     "app/api/sites/[siteId]/vitals/route.ts": {
       "maxDuration": 60
     },
+    "app/api/sites/[siteId]/measurement/ga4/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/sites/[siteId]/measurement/pagespeed/route.ts": {
+      "maxDuration": 60
+    },
     "app/api/sites/[siteId]/index-status/route.ts": {
       "maxDuration": 60
     },

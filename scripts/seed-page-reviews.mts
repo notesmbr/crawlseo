@@ -293,6 +293,14 @@ async function main() {
         eeatGaps: [],
         eeatEvidenceDetails: [],
         eeatEvidenceState: "MISSING" as const,
+        mediaAccuracyEvidenceState: "MISSING" as const,
+        mediaAccuracyDetails: Prisma.DbNull,
+        searchAppearanceEvidenceState: "MISSING" as const,
+        searchAppearanceDetails: Prisma.DbNull,
+        readabilityUserFriendlinessEvidenceState: "MISSING" as const,
+        readabilityUserFriendlinessDetails: Prisma.DbNull,
+        technicalSnapshotEvidenceState: "MISSING" as const,
+        technicalSnapshotDetails: Prisma.DbNull,
         updatedAt: now,
       } satisfies Prisma.PageReviewCreateManyInput;
     });

@@ -195,6 +195,39 @@ export const GATE_STATUS_OPTIONS = [
   "not_applicable",
 ] as const;
 
+export const AUDIT_CHECK_STATUS_OPTIONS = ["pass", "issue", "not_checked"] as const;
+export const GOOGLE_SNIPPET_SOURCE_OPTIONS = [
+  "meta_description",
+  "body_passage",
+  "mixed",
+  "unknown",
+] as const;
+export const GOOGLE_REPROCESSING_STATUS_OPTIONS = [
+  "not_checked",
+  "current",
+  "stale",
+  "not_indexed",
+] as const;
+export const TECHNICAL_CRAWL_STATUS_OPTIONS = [
+  "completed",
+  "failed",
+  "running",
+  "missing",
+] as const;
+export const ORPHAN_STATUS_OPTIONS = ["not_orphan", "orphan", "unknown"] as const;
+export const BROKEN_LINK_STATUS_OPTIONS = ["none_found", "found", "unknown"] as const;
+export const READABILITY_CHECK_KEYS = [
+  "answerFirst",
+  "plainLanguage",
+  "informationHierarchy",
+  "scannability",
+  "jargonExplained",
+  "actionClarity",
+  "accessibility",
+  "desktopUsability",
+  "mobileUsability",
+] as const;
+
 export type PageReviewStatus = (typeof PAGE_REVIEW_STATUSES)[number];
 export type PageReviewPriority = (typeof PAGE_REVIEW_PRIORITIES)[number];
 
@@ -301,6 +334,130 @@ export type EeatEvidenceDetail = {
   checkedAt: string;
   reviewer: string;
   limitation: string;
+};
+
+export type EvidenceSource = {
+  label: string;
+  url: string;
+  checkedAt: string;
+};
+
+export type EvidenceGroupFields = {
+  evidenceState: string;
+  checkedAt: string;
+  reviewer: string;
+  sources: EvidenceSource[];
+  finding: string;
+  limitation: string;
+  notApplicableReason: string;
+};
+
+export type MediaAssetEvidence = {
+  placement: string;
+  assetUrl: string;
+  sourceUrl: string;
+  subjectLocation: string;
+  creator: string;
+  capturedAt: string;
+  licenseOrPermission: string;
+  attribution: string;
+  altText: string;
+  caption: string;
+  accuracyStatus: string;
+  relevanceStatus: string;
+  desktopRenderStatus: string;
+  mobileRenderStatus: string;
+  limitation: string;
+};
+
+export type MediaAccuracyEvidence = EvidenceGroupFields & {
+  inventoryComplete: boolean | null;
+  assets: MediaAssetEvidence[];
+};
+
+export type SearchAppearanceEvidence = EvidenceGroupFields & {
+  rendered: {
+    title: string;
+    metaDescription: string;
+    canonical: string;
+    openGraphTitle: string;
+    openGraphDescription: string;
+    twitterTitle: string;
+    twitterDescription: string;
+    socialImage: string;
+  };
+  google: {
+    query: string;
+    locale: string;
+    device: string;
+    displayedTitle: string;
+    displayedSnippet: string;
+    snippetSource: string;
+    bodyPassage: string;
+    titleRewrite: boolean | null;
+    reprocessingStatus: string;
+  };
+  competitorPatterns: Array<{
+    url: string;
+    title: string;
+    snippet: string;
+    pattern: string;
+  }>;
+  proposedTitle: string;
+  proposedMetaDescription: string;
+};
+
+export type ReadabilityCheck = {
+  status: string;
+  finding: string;
+};
+
+export type ReadabilityUserFriendlinessEvidence = EvidenceGroupFields & {
+  checks: Record<(typeof READABILITY_CHECK_KEYS)[number], ReadabilityCheck>;
+};
+
+export type TechnicalSnapshotEvidence = EvidenceGroupFields & {
+  crawl: {
+    crawlId: string;
+    crawledAt: string;
+    status: string;
+    pageStatusCode: string;
+    indexable: boolean | null;
+    canonical: string;
+    schemaTypes: string;
+    internalLinksOut: string;
+    inboundInternalLinks: string;
+    inboundSources: Array<{ sourceUrl: string; anchors: string }>;
+    orphanStatus: string;
+    brokenLinkStatus: string;
+    brokenLinks: Array<{ url: string; statusCode: string; anchorText: string }>;
+    missingReason: string;
+  };
+  cwv: {
+    evidenceState: string;
+    sourceUrl: string;
+    device: string;
+    checkedAt: string;
+    lcp: string;
+    inp: string;
+    cls: string;
+    missingReason: string;
+  };
+};
+
+export type SavedKeywordOwner = {
+  id: string;
+  query: string;
+  ownerPage: string;
+  status: string;
+};
+
+export type SavedKeywordOwnershipCheck = {
+  status: "matched" | "mismatch" | "missing" | "unavailable" | "not_applicable";
+  query: string;
+  expectedOwner: string;
+  savedOwner: string;
+  message: string;
 };
 
 export type KeywordPlannerMonthlySearch = {
@@ -426,6 +583,10 @@ export type PageReviewRecord = {
   keywordPlanner: KeywordPlannerEvidence;
   googleTrends: GoogleTrendsEvidence;
   measurementPlan: MeasurementPlanEvidence;
+  mediaAccuracy: MediaAccuracyEvidence;
+  searchAppearance: SearchAppearanceEvidence;
+  readabilityUserFriendliness: ReadabilityUserFriendlinessEvidence;
+  technicalSnapshot: TechnicalSnapshotEvidence;
   topicCluster: string;
   parentPage: string;
   clusterGaps: string;
@@ -535,6 +696,10 @@ export function inspectPageReviewDraft(
 
     const legacyDraft = draft as PageReviewRecord & { smallestChange?: unknown };
     const draftMeasurement = object(draft.measurementPlan);
+    const draftMedia = object(draft.mediaAccuracy);
+    const draftSearchAppearance = object(draft.searchAppearance);
+    const draftReadability = object(draft.readabilityUserFriendliness);
+    const draftTechnical = object(draft.technicalSnapshot);
     const safeDraft = {
       ...baseReview,
       ...draft,
@@ -553,6 +718,66 @@ export function inspectPageReviewDraft(
           ? draftMeasurement.comparisonWindows
           : baseReview.measurementPlan.comparisonWindows,
       } as MeasurementPlanEvidence,
+      mediaAccuracy: {
+        ...baseReview.mediaAccuracy,
+        ...draftMedia,
+        sources: Array.isArray(draftMedia.sources)
+          ? draftMedia.sources
+          : baseReview.mediaAccuracy.sources,
+        assets: Array.isArray(draftMedia.assets)
+          ? draftMedia.assets
+          : baseReview.mediaAccuracy.assets,
+      } as MediaAccuracyEvidence,
+      searchAppearance: {
+        ...baseReview.searchAppearance,
+        ...draftSearchAppearance,
+        sources: Array.isArray(draftSearchAppearance.sources)
+          ? draftSearchAppearance.sources
+          : baseReview.searchAppearance.sources,
+        rendered: {
+          ...baseReview.searchAppearance.rendered,
+          ...object(draftSearchAppearance.rendered),
+        },
+        google: {
+          ...baseReview.searchAppearance.google,
+          ...object(draftSearchAppearance.google),
+        },
+        competitorPatterns: Array.isArray(draftSearchAppearance.competitorPatterns)
+          ? draftSearchAppearance.competitorPatterns
+          : baseReview.searchAppearance.competitorPatterns,
+      } as SearchAppearanceEvidence,
+      readabilityUserFriendliness: {
+        ...baseReview.readabilityUserFriendliness,
+        ...draftReadability,
+        sources: Array.isArray(draftReadability.sources)
+          ? draftReadability.sources
+          : baseReview.readabilityUserFriendliness.sources,
+        checks: {
+          ...baseReview.readabilityUserFriendliness.checks,
+          ...object(draftReadability.checks),
+        },
+      } as ReadabilityUserFriendlinessEvidence,
+      technicalSnapshot: {
+        ...baseReview.technicalSnapshot,
+        ...draftTechnical,
+        sources: Array.isArray(draftTechnical.sources)
+          ? draftTechnical.sources
+          : baseReview.technicalSnapshot.sources,
+        crawl: {
+          ...baseReview.technicalSnapshot.crawl,
+          ...object(draftTechnical.crawl),
+          inboundSources: Array.isArray(object(draftTechnical.crawl).inboundSources)
+            ? object(draftTechnical.crawl).inboundSources
+            : baseReview.technicalSnapshot.crawl.inboundSources,
+          brokenLinks: Array.isArray(object(draftTechnical.crawl).brokenLinks)
+            ? object(draftTechnical.crawl).brokenLinks
+            : baseReview.technicalSnapshot.crawl.brokenLinks,
+        },
+        cwv: {
+          ...baseReview.technicalSnapshot.cwv,
+          ...object(draftTechnical.cwv),
+        },
+      } as TechnicalSnapshotEvidence,
       proposedChange:
         typeof draft.proposedChange === "string"
           ? draft.proposedChange
@@ -623,6 +848,285 @@ export function emptyMeasurementComparisonWindow(): MeasurementComparisonWindow 
     activeUsers: "",
     keyEvents: "",
     limitation: "",
+  };
+}
+
+export function emptyEvidenceSource(): EvidenceSource {
+  return { label: "", url: "", checkedAt: "" };
+}
+
+function emptyEvidenceGroup(): EvidenceGroupFields {
+  return {
+    evidenceState: "missing",
+    checkedAt: "",
+    reviewer: "",
+    sources: [],
+    finding: "",
+    limitation: "",
+    notApplicableReason: "",
+  };
+}
+
+export function emptyMediaAssetEvidence(): MediaAssetEvidence {
+  return {
+    placement: "",
+    assetUrl: "",
+    sourceUrl: "",
+    subjectLocation: "",
+    creator: "",
+    capturedAt: "",
+    licenseOrPermission: "",
+    attribution: "",
+    altText: "",
+    caption: "",
+    accuracyStatus: "not_checked",
+    relevanceStatus: "not_checked",
+    desktopRenderStatus: "not_checked",
+    mobileRenderStatus: "not_checked",
+    limitation: "",
+  };
+}
+
+export function emptyMediaAccuracyEvidence(): MediaAccuracyEvidence {
+  return { ...emptyEvidenceGroup(), inventoryComplete: null, assets: [] };
+}
+
+export function emptySearchAppearanceEvidence(): SearchAppearanceEvidence {
+  return {
+    ...emptyEvidenceGroup(),
+    rendered: {
+      title: "",
+      metaDescription: "",
+      canonical: "",
+      openGraphTitle: "",
+      openGraphDescription: "",
+      twitterTitle: "",
+      twitterDescription: "",
+      socialImage: "",
+    },
+    google: {
+      query: "",
+      locale: "",
+      device: "",
+      displayedTitle: "",
+      displayedSnippet: "",
+      snippetSource: "",
+      bodyPassage: "",
+      titleRewrite: null,
+      reprocessingStatus: "not_checked",
+    },
+    competitorPatterns: [],
+    proposedTitle: "",
+    proposedMetaDescription: "",
+  };
+}
+
+function emptyReadabilityChecks(): ReadabilityUserFriendlinessEvidence["checks"] {
+  return Object.fromEntries(
+    READABILITY_CHECK_KEYS.map((key) => [key, { status: "not_checked", finding: "" }]),
+  ) as ReadabilityUserFriendlinessEvidence["checks"];
+}
+
+export function emptyReadabilityUserFriendlinessEvidence(): ReadabilityUserFriendlinessEvidence {
+  return { ...emptyEvidenceGroup(), checks: emptyReadabilityChecks() };
+}
+
+export function emptyTechnicalSnapshotEvidence(): TechnicalSnapshotEvidence {
+  return {
+    ...emptyEvidenceGroup(),
+    crawl: {
+      crawlId: "",
+      crawledAt: "",
+      status: "missing",
+      pageStatusCode: "",
+      indexable: null,
+      canonical: "",
+      schemaTypes: "",
+      internalLinksOut: "",
+      inboundInternalLinks: "",
+      inboundSources: [],
+      orphanStatus: "unknown",
+      brokenLinkStatus: "unknown",
+      brokenLinks: [],
+      missingReason: "",
+    },
+    cwv: {
+      evidenceState: "missing",
+      sourceUrl: "",
+      device: "",
+      checkedAt: "",
+      lcp: "",
+      inp: "",
+      cls: "",
+      missingReason: "",
+    },
+  };
+}
+
+function normalizeEvidenceGroup(value: unknown): EvidenceGroupFields {
+  const group = object(value);
+  return {
+    evidenceState: text(group.evidenceState) || "missing",
+    checkedAt: text(group.checkedAt),
+    reviewer: text(group.reviewer),
+    sources: Array.isArray(group.sources)
+      ? group.sources.map((entry) => {
+          const source = object(entry);
+          return {
+            label: text(source.label),
+            url: text(source.url),
+            checkedAt: text(source.checkedAt),
+          };
+        })
+      : [],
+    finding: text(group.finding),
+    limitation: text(group.limitation),
+    notApplicableReason: text(group.notApplicableReason),
+  };
+}
+
+function nullableBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizeMediaAccuracy(value: unknown): MediaAccuracyEvidence {
+  const group = object(value);
+  return {
+    ...normalizeEvidenceGroup(value),
+    inventoryComplete: nullableBoolean(group.inventoryComplete),
+    assets: Array.isArray(group.assets)
+      ? group.assets.map((entry) => {
+          const asset = object(entry);
+          return {
+            placement: text(asset.placement),
+            assetUrl: text(asset.assetUrl),
+            sourceUrl: text(asset.sourceUrl),
+            subjectLocation: text(asset.subjectLocation),
+            creator: text(asset.creator),
+            capturedAt: text(asset.capturedAt),
+            licenseOrPermission: text(asset.licenseOrPermission),
+            attribution: text(asset.attribution),
+            altText: text(asset.altText),
+            caption: text(asset.caption),
+            accuracyStatus: text(asset.accuracyStatus) || "not_checked",
+            relevanceStatus: text(asset.relevanceStatus) || "not_checked",
+            desktopRenderStatus: text(asset.desktopRenderStatus) || "not_checked",
+            mobileRenderStatus: text(asset.mobileRenderStatus) || "not_checked",
+            limitation: text(asset.limitation),
+          };
+        })
+      : [],
+  };
+}
+
+function normalizeSearchAppearance(value: unknown): SearchAppearanceEvidence {
+  const group = object(value);
+  const rendered = object(group.rendered);
+  const google = object(group.google);
+  return {
+    ...normalizeEvidenceGroup(value),
+    rendered: {
+      title: text(rendered.title),
+      metaDescription: text(rendered.metaDescription),
+      canonical: text(rendered.canonical),
+      openGraphTitle: text(rendered.openGraphTitle),
+      openGraphDescription: text(rendered.openGraphDescription),
+      twitterTitle: text(rendered.twitterTitle),
+      twitterDescription: text(rendered.twitterDescription),
+      socialImage: text(rendered.socialImage),
+    },
+    google: {
+      query: text(google.query),
+      locale: text(google.locale),
+      device: text(google.device),
+      displayedTitle: text(google.displayedTitle),
+      displayedSnippet: text(google.displayedSnippet),
+      snippetSource: text(google.snippetSource),
+      bodyPassage: text(google.bodyPassage),
+      titleRewrite: nullableBoolean(google.titleRewrite),
+      reprocessingStatus: text(google.reprocessingStatus) || "not_checked",
+    },
+    competitorPatterns: Array.isArray(group.competitorPatterns)
+      ? group.competitorPatterns.map((entry) => {
+          const pattern = object(entry);
+          return {
+            url: text(pattern.url),
+            title: text(pattern.title),
+            snippet: text(pattern.snippet),
+            pattern: text(pattern.pattern),
+          };
+        })
+      : [],
+    proposedTitle: text(group.proposedTitle),
+    proposedMetaDescription: text(group.proposedMetaDescription),
+  };
+}
+
+function normalizeReadabilityUserFriendliness(
+  value: unknown,
+): ReadabilityUserFriendlinessEvidence {
+  const group = object(value);
+  const checks = object(group.checks);
+  const normalizedChecks = emptyReadabilityChecks();
+  for (const key of READABILITY_CHECK_KEYS) {
+    const check = object(checks[key]);
+    normalizedChecks[key] = {
+      status: text(check.status) || "not_checked",
+      finding: text(check.finding),
+    };
+  }
+  return { ...normalizeEvidenceGroup(value), checks: normalizedChecks };
+}
+
+function normalizeTechnicalSnapshot(value: unknown): TechnicalSnapshotEvidence {
+  const group = object(value);
+  const crawl = object(group.crawl);
+  const cwv = object(group.cwv);
+  return {
+    ...normalizeEvidenceGroup(value),
+    crawl: {
+      crawlId: text(crawl.crawlId),
+      crawledAt: text(crawl.crawledAt),
+      status: text(crawl.status) || "missing",
+      pageStatusCode: numberText(crawl.pageStatusCode),
+      indexable: nullableBoolean(crawl.indexable),
+      canonical: text(crawl.canonical),
+      schemaTypes: stringList(crawl.schemaTypes).join("\n"),
+      internalLinksOut: numberText(crawl.internalLinksOut),
+      inboundInternalLinks: numberText(crawl.inboundInternalLinks),
+      inboundSources: Array.isArray(crawl.inboundSources)
+        ? crawl.inboundSources.map((entry) => {
+            const source = object(entry);
+            return {
+              sourceUrl: text(source.sourceUrl),
+              anchors: stringList(source.anchors).join("\n"),
+            };
+          })
+        : [],
+      orphanStatus: text(crawl.orphanStatus) || "unknown",
+      brokenLinkStatus: text(crawl.brokenLinkStatus) || "unknown",
+      brokenLinks: Array.isArray(crawl.brokenLinks)
+        ? crawl.brokenLinks.map((entry) => {
+            const link = object(entry);
+            return {
+              url: text(link.url),
+              statusCode: numberText(link.statusCode),
+              anchorText: text(link.anchorText),
+            };
+          })
+        : [],
+      missingReason: text(crawl.missingReason),
+    },
+    cwv: {
+      evidenceState: text(cwv.evidenceState) || "missing",
+      sourceUrl: text(cwv.sourceUrl),
+      device: text(cwv.device),
+      checkedAt: text(cwv.checkedAt),
+      lcp: numberText(cwv.lcp),
+      inp: numberText(cwv.inp),
+      cls: numberText(cwv.cls),
+      missingReason: text(cwv.missingReason),
+    },
   };
 }
 
@@ -840,6 +1344,12 @@ export function normalizePageReview(value: unknown): PageReviewRecord {
     keywordPlanner: normalizeKeywordPlanner(review.keywordPlanner),
     googleTrends: normalizeGoogleTrends(review.googleTrends),
     measurementPlan: normalizeMeasurementPlan(review.measurementPlan),
+    mediaAccuracy: normalizeMediaAccuracy(review.mediaAccuracy),
+    searchAppearance: normalizeSearchAppearance(review.searchAppearance),
+    readabilityUserFriendliness: normalizeReadabilityUserFriendliness(
+      review.readabilityUserFriendliness,
+    ),
+    technicalSnapshot: normalizeTechnicalSnapshot(review.technicalSnapshot),
     topicCluster: text(topic.cluster),
     parentPage: text(topic.parentPage),
     clusterGaps: stringList(topic.clusterGaps).join("\n") || text(topic.clusterGaps),
@@ -934,6 +1444,86 @@ export function normalizePageReviewSummary(value: unknown): PageReviewSummary {
   };
 }
 
+export function normalizeSavedKeywordOwners(value: unknown): SavedKeywordOwner[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const owner = object(entry);
+    const id = text(owner.id);
+    const query = text(owner.query);
+    const ownerPage = text(owner.ownerPage);
+    if (!query || !ownerPage) return [];
+    return [{ id, query, ownerPage, status: text(owner.status) || "active" }];
+  });
+}
+
+function comparableOwnerCanonical(value: string): string {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.search = "";
+    const path = url.pathname === "/" ? "/" : url.pathname.replace(/\/+$/, "");
+    return `${url.protocol.toLowerCase()}//${url.hostname.toLowerCase()}${path}`;
+  } catch {
+    return value.trim().toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+export function evaluateSavedKeywordOwnership(
+  review: PageReviewRecord,
+  savedKeywords: SavedKeywordOwner[] | null,
+): SavedKeywordOwnershipCheck {
+  const targeted = ["this_page", "another_canonical"].includes(review.keywordOwner);
+  const query = normalizedReviewQuery(review.primaryQuery);
+  const expectedOwner =
+    review.keywordOwner === "this_page" ? review.canonicalUrl : review.ownerCanonical;
+  if (!targeted || !query || !expectedOwner.trim()) {
+    return {
+      status: "not_applicable",
+      query,
+      expectedOwner,
+      savedOwner: "",
+      message: "No SavedKeyword owner comparison applies until a tracked query owner is selected.",
+    };
+  }
+  if (savedKeywords === null) {
+    return {
+      status: "unavailable",
+      query,
+      expectedOwner,
+      savedOwner: "",
+      message: "SavedKeyword ownership could not be loaded, so completion cannot be reconciled.",
+    };
+  }
+  const saved = savedKeywords.find(
+    (owner) => owner.status === "active" && normalizedReviewQuery(owner.query) === query,
+  );
+  if (!saved) {
+    return {
+      status: "missing",
+      query,
+      expectedOwner,
+      savedOwner: "",
+      message: "This approved query has no active SavedKeyword monitoring owner.",
+    };
+  }
+  if (comparableOwnerCanonical(saved.ownerPage) !== comparableOwnerCanonical(expectedOwner)) {
+    return {
+      status: "mismatch",
+      query,
+      expectedOwner,
+      savedOwner: saved.ownerPage,
+      message: "PageReview and SavedKeyword assign this query to different canonical owners.",
+    };
+  }
+  return {
+    status: "matched",
+    query,
+    expectedOwner,
+    savedOwner: saved.ownerPage,
+    message: "PageReview and the active SavedKeyword owner match.",
+  };
+}
+
 export function matchesPageReviewFilters(
   review: PageReviewSummary,
   filters: PageReviewFilters,
@@ -958,7 +1548,10 @@ export function matchesPageReviewFilters(
   );
 }
 
-export function validatePageReview(review: PageReviewRecord): string[] {
+export function validatePageReview(
+  review: PageReviewRecord,
+  ownershipCheck?: SavedKeywordOwnershipCheck,
+): string[] {
   const errors: string[] = [];
   if (!review.pageId.trim()) errors.push("Page ID is required.");
   if (!isValidUrl(review.canonicalUrl, true)) errors.push("Canonical URL must be a valid https:// URL.");
@@ -1031,6 +1624,7 @@ export function validatePageReview(review: PageReviewRecord): string[] {
     "monitoring",
     "complete",
   ].includes(review.manualChatState);
+  validateStructuredEvidenceGroups(review, errors, approvedReviewState);
   if (approvedReviewState) {
     if (review.performanceState === "unassessed") {
       errors.push("Assess the page performance state before approval.");
@@ -1368,6 +1962,14 @@ export function validatePageReview(review: PageReviewRecord): string[] {
     }
   }
   if (review.manualChatState === "complete") {
+    if (
+      ownershipCheck &&
+      !["matched", "not_applicable"].includes(ownershipCheck.status)
+    ) {
+      errors.push(
+        "Completion is blocked until PageReview and the active SavedKeyword owner are reconciled.",
+      );
+    }
     if (!TERMINAL_DECISION_STATES.has(review.decisionAction)) {
       errors.push("Decision state must be a terminal outcome before manual collaboration can be complete.");
     }
@@ -1492,6 +2094,12 @@ export function pageReviewPatchInput(review: PageReviewRecord) {
     keywordPlanner: keywordPlannerInput(review.keywordPlanner),
     googleTrends: googleTrendsInput(review.googleTrends),
     measurementPlan: measurementPlanInput(review.measurementPlan),
+    mediaAccuracy: mediaAccuracyInput(review.mediaAccuracy),
+    searchAppearance: searchAppearanceInput(review.searchAppearance),
+    readabilityUserFriendliness: readabilityUserFriendlinessInput(
+      review.readabilityUserFriendliness,
+    ),
+    technicalSnapshot: technicalSnapshotInput(review.technicalSnapshot),
     topic: {
       cluster: nullableText(review.topicCluster),
       parentPage: nullableText(review.parentPage),
@@ -1738,6 +2346,330 @@ function measurementPlanInput(plan: MeasurementPlanEvidence) {
     limitation: nullableText(plan.limitation),
     notApplicableReason: nullableText(plan.notApplicableReason),
   };
+}
+
+function evidenceGroupInput(group: EvidenceGroupFields) {
+  return {
+    evidenceState: group.evidenceState,
+    checkedAt: nullableIsoDate(group.checkedAt),
+    reviewer: nullableText(group.reviewer),
+    sources: group.sources
+      .filter((source) => [source.label, source.url, source.checkedAt].some((value) => value.trim()))
+      .map((source) => ({
+        label: source.label.trim(),
+        url: source.url.trim(),
+        checkedAt: nullableIsoDate(source.checkedAt),
+      })),
+    finding: nullableText(group.finding),
+    limitation: nullableText(group.limitation),
+    notApplicableReason: nullableText(group.notApplicableReason),
+  };
+}
+
+function mediaAccuracyInput(group: MediaAccuracyEvidence) {
+  return {
+    ...evidenceGroupInput(group),
+    inventoryComplete: group.inventoryComplete,
+    assets: group.assets
+      .filter((asset) => [asset.placement, asset.assetUrl].some((value) => value.trim()))
+      .map((asset) => ({
+        placement: asset.placement.trim(),
+        assetUrl: asset.assetUrl.trim(),
+        sourceUrl: nullableText(asset.sourceUrl),
+        subjectLocation: nullableText(asset.subjectLocation),
+        creator: nullableText(asset.creator),
+        capturedAt: nullableText(asset.capturedAt),
+        licenseOrPermission: nullableText(asset.licenseOrPermission),
+        attribution: nullableText(asset.attribution),
+        altText: nullableText(asset.altText),
+        caption: nullableText(asset.caption),
+        accuracyStatus: asset.accuracyStatus,
+        relevanceStatus: asset.relevanceStatus,
+        desktopRenderStatus: asset.desktopRenderStatus,
+        mobileRenderStatus: asset.mobileRenderStatus,
+        limitation: nullableText(asset.limitation),
+      })),
+  };
+}
+
+function searchAppearanceInput(group: SearchAppearanceEvidence) {
+  return {
+    ...evidenceGroupInput(group),
+    rendered: {
+      title: nullableText(group.rendered.title),
+      metaDescription: nullableText(group.rendered.metaDescription),
+      canonical: nullableText(group.rendered.canonical),
+      openGraphTitle: nullableText(group.rendered.openGraphTitle),
+      openGraphDescription: nullableText(group.rendered.openGraphDescription),
+      twitterTitle: nullableText(group.rendered.twitterTitle),
+      twitterDescription: nullableText(group.rendered.twitterDescription),
+      socialImage: nullableText(group.rendered.socialImage),
+    },
+    google: {
+      query: nullableText(group.google.query),
+      locale: nullableText(group.google.locale),
+      device: group.google.device || null,
+      displayedTitle: nullableText(group.google.displayedTitle),
+      displayedSnippet: nullableText(group.google.displayedSnippet),
+      snippetSource: group.google.snippetSource || null,
+      bodyPassage: nullableText(group.google.bodyPassage),
+      titleRewrite: group.google.titleRewrite,
+      reprocessingStatus: group.google.reprocessingStatus || null,
+    },
+    competitorPatterns: group.competitorPatterns
+      .filter((pattern) => [pattern.url, pattern.title, pattern.snippet, pattern.pattern].some((value) => value.trim()))
+      .map((pattern) => ({
+        url: pattern.url.trim(),
+        title: pattern.title.trim(),
+        snippet: nullableText(pattern.snippet),
+        pattern: pattern.pattern.trim(),
+      })),
+    proposedTitle: nullableText(group.proposedTitle),
+    proposedMetaDescription: nullableText(group.proposedMetaDescription),
+  };
+}
+
+function readabilityUserFriendlinessInput(group: ReadabilityUserFriendlinessEvidence) {
+  return {
+    ...evidenceGroupInput(group),
+    checks: Object.fromEntries(
+      READABILITY_CHECK_KEYS.map((key) => [
+        key,
+        {
+          status: group.checks[key].status,
+          finding: nullableText(group.checks[key].finding),
+        },
+      ]),
+    ),
+  };
+}
+
+function technicalSnapshotInput(group: TechnicalSnapshotEvidence) {
+  return {
+    ...evidenceGroupInput(group),
+    crawl: {
+      crawlId: nullableText(group.crawl.crawlId),
+      crawledAt: nullableIsoDate(group.crawl.crawledAt),
+      status: group.crawl.status || null,
+      pageStatusCode: nullableNumber(group.crawl.pageStatusCode),
+      indexable: group.crawl.indexable,
+      canonical: nullableText(group.crawl.canonical),
+      schemaTypes: splitLines(group.crawl.schemaTypes),
+      internalLinksOut: nullableNumber(group.crawl.internalLinksOut),
+      inboundInternalLinks: nullableNumber(group.crawl.inboundInternalLinks),
+      inboundSources: group.crawl.inboundSources
+        .filter((source) => source.sourceUrl.trim() || source.anchors.trim())
+        .map((source) => ({
+          sourceUrl: source.sourceUrl.trim(),
+          anchors: splitLines(source.anchors),
+        })),
+      orphanStatus: group.crawl.orphanStatus,
+      brokenLinkStatus: group.crawl.brokenLinkStatus,
+      brokenLinks: group.crawl.brokenLinks
+        .filter((link) => link.url.trim() || link.anchorText.trim() || link.statusCode.trim())
+        .map((link) => ({
+          url: link.url.trim(),
+          statusCode: nullableNumber(link.statusCode),
+          anchorText: nullableText(link.anchorText),
+        })),
+      missingReason: nullableText(group.crawl.missingReason),
+    },
+    cwv: {
+      evidenceState: group.cwv.evidenceState,
+      sourceUrl: nullableText(group.cwv.sourceUrl),
+      device: group.cwv.device || null,
+      checkedAt: nullableIsoDate(group.cwv.checkedAt),
+      lcp: nullableNumber(group.cwv.lcp),
+      inp: nullableNumber(group.cwv.inp),
+      cls: nullableNumber(group.cwv.cls),
+      missingReason: nullableText(group.cwv.missingReason),
+    },
+  };
+}
+
+function validateStructuredEvidenceGroups(
+  review: PageReviewRecord,
+  errors: string[],
+  approved: boolean,
+) {
+  const groups: Array<[string, EvidenceGroupFields]> = [
+    ["Media accuracy", review.mediaAccuracy],
+    ["Search appearance", review.searchAppearance],
+    ["Readability and user-friendliness", review.readabilityUserFriendliness],
+    ["Technical snapshot", review.technicalSnapshot],
+  ];
+
+  for (const [label, group] of groups) {
+    group.sources.forEach((source, index) => {
+      if (![source.label, source.url, source.checkedAt].some((value) => value.trim())) return;
+      const prefix = `${label} source ${index + 1}`;
+      if (!source.label.trim()) errors.push(`${prefix} needs a label.`);
+      if (!isValidUrl(source.url, false)) errors.push(`${prefix} needs a valid HTTP(S) URL.`);
+      if (!source.checkedAt.trim() || Number.isNaN(new Date(source.checkedAt).getTime())) {
+        errors.push(`${prefix} needs a valid checked date and time.`);
+      }
+    });
+    if (!approved) continue;
+    if (group.evidenceState === "missing") {
+      errors.push(`${label} evidence cannot remain missing in an approved review.`);
+      continue;
+    }
+    if (["verified", "partial"].includes(group.evidenceState)) {
+      if (!group.checkedAt.trim() || Number.isNaN(new Date(group.checkedAt).getTime())) {
+        errors.push(`${label} evidence needs a valid checked date and time.`);
+      }
+      if (!group.reviewer.trim()) errors.push(`${label} evidence needs its reviewer or team.`);
+      if (!group.finding.trim()) errors.push(`${label} evidence needs a plain-language finding.`);
+      if (group.sources.length === 0) {
+        errors.push(`${label} evidence needs at least one dated source.`);
+      }
+      if (group.evidenceState === "partial" && !group.limitation.trim()) {
+        errors.push(`Partial ${label.toLowerCase()} evidence needs an honest limitation.`);
+      }
+    }
+    if (group.evidenceState === "not_applicable" && !group.notApplicableReason.trim()) {
+      errors.push(`Explain why ${label.toLowerCase()} evidence is not applicable.`);
+    }
+    if (group.evidenceState !== "not_applicable" && group.notApplicableReason.trim()) {
+      errors.push(
+        `${label} not-applicable reason is only valid when its evidence state is not applicable.`,
+      );
+    }
+  }
+
+  if (approved && review.indexPolicy === "index") {
+    for (const [label, state] of [
+      ["Search appearance", review.searchAppearance.evidenceState],
+      ["Readability and user-friendliness", review.readabilityUserFriendliness.evidenceState],
+      ["Technical snapshot", review.technicalSnapshot.evidenceState],
+    ] as const) {
+      if (state === "not_applicable") {
+        errors.push(`${label} evidence cannot be not applicable for an indexable page.`);
+      }
+    }
+  }
+
+  review.mediaAccuracy.assets.forEach((asset, index) => {
+    if (!Object.values(asset).some((value) => value.trim())) return;
+    const prefix = `Media asset ${index + 1}`;
+    if (!asset.placement.trim()) errors.push(`${prefix} needs its page placement.`);
+    if (!isValidUrl(asset.assetUrl, false)) errors.push(`${prefix} needs a valid asset URL.`);
+    if (asset.sourceUrl.trim() && !isValidUrl(asset.sourceUrl, false)) {
+      errors.push(`${prefix} source URL must use HTTP(S).`);
+    }
+  });
+  if (approved && review.mediaAccuracy.evidenceState === "verified") {
+    if (review.mediaAccuracy.inventoryComplete !== true) {
+      errors.push("Verified media accuracy requires a complete media inventory.");
+    }
+    if (review.mediaAccuracy.assets.length === 0) {
+      errors.push("Verified media accuracy needs at least one reviewed asset.");
+    }
+    review.mediaAccuracy.assets.forEach((asset, index) => {
+      for (const [label, status] of [
+        ["accuracy", asset.accuracyStatus],
+        ["relevance", asset.relevanceStatus],
+        ["desktop render", asset.desktopRenderStatus],
+        ["mobile render", asset.mobileRenderStatus],
+      ]) {
+        if (status === "not_checked") {
+          errors.push(`Media asset ${index + 1} ${label} cannot remain not checked when verified.`);
+        }
+      }
+    });
+  }
+
+  review.searchAppearance.competitorPatterns.forEach((pattern, index) => {
+    if (![pattern.url, pattern.title, pattern.snippet, pattern.pattern].some((value) => value.trim())) {
+      return;
+    }
+    const prefix = `Search appearance competitor ${index + 1}`;
+    if (!isValidUrl(pattern.url, false)) errors.push(`${prefix} needs a valid URL.`);
+    if (!pattern.title.trim()) errors.push(`${prefix} needs the observed title.`);
+    if (!pattern.pattern.trim()) errors.push(`${prefix} needs the observed pattern.`);
+  });
+  if (approved && review.searchAppearance.evidenceState === "verified") {
+    const { rendered, google } = review.searchAppearance;
+    if (!rendered.title.trim()) errors.push("Verified search appearance needs the rendered title.");
+    if (!rendered.metaDescription.trim()) {
+      errors.push("Verified search appearance needs the rendered meta description.");
+    }
+    if (!isValidUrl(rendered.canonical, true)) {
+      errors.push("Verified search appearance needs a valid rendered canonical URL.");
+    }
+    for (const [label, value] of [
+      ["Google query", google.query],
+      ["Google locale", google.locale],
+      ["Google device", google.device],
+      ["displayed Google title", google.displayedTitle],
+      ["displayed Google snippet", google.displayedSnippet],
+      ["Google snippet source", google.snippetSource],
+    ]) {
+      if (!value.trim()) errors.push(`Verified search appearance needs the ${label}.`);
+    }
+  }
+
+  if (approved && review.readabilityUserFriendliness.evidenceState === "verified") {
+    for (const key of READABILITY_CHECK_KEYS) {
+      const check = review.readabilityUserFriendliness.checks[key];
+      if (check.status === "not_checked") {
+        errors.push(`Readability check ${key} cannot remain not checked when verified.`);
+      }
+      if (!check.finding.trim()) {
+        errors.push(`Readability check ${key} needs its finding when verified.`);
+      }
+    }
+  }
+
+  const crawl = review.technicalSnapshot.crawl;
+  const cwv = review.technicalSnapshot.cwv;
+  const completeCrawlFacts =
+    crawl.status === "completed" &&
+    Boolean(crawl.crawlId.trim() && crawl.crawledAt.trim() && crawl.pageStatusCode.trim()) &&
+    crawl.indexable !== null &&
+    Boolean(crawl.canonical.trim()) &&
+    Boolean(crawl.internalLinksOut.trim() && crawl.inboundInternalLinks.trim()) &&
+    crawl.orphanStatus !== "unknown" &&
+    crawl.brokenLinkStatus !== "unknown";
+  const completeCwvFacts =
+    cwv.evidenceState === "verified" &&
+    Boolean(cwv.sourceUrl.trim() && cwv.device && cwv.checkedAt.trim()) &&
+    Boolean(cwv.lcp.trim() && cwv.inp.trim() && cwv.cls.trim());
+  if (approved && review.technicalSnapshot.evidenceState === "verified") {
+    if (!completeCrawlFacts) {
+      errors.push("Verified technical evidence needs a completed crawl and all crawl facts/counts/statuses.");
+    }
+    if (!completeCwvFacts) {
+      errors.push("Verified technical evidence needs sourced LCP, INP, and CLS evidence.");
+    }
+  }
+  if (approved && review.technicalSnapshot.evidenceState === "partial") {
+    if (!completeCrawlFacts && !crawl.missingReason.trim()) {
+      errors.push("Partial technical evidence needs the missing crawl-facts reason.");
+    }
+    if (!completeCwvFacts && !cwv.missingReason.trim()) {
+      errors.push("Partial technical evidence needs the missing Core Web Vitals reason.");
+    }
+  }
+  if (crawl.canonical.trim() && !isValidUrl(crawl.canonical, true)) {
+    errors.push("Technical crawl canonical must be a valid HTTPS URL.");
+  }
+  crawl.inboundSources.forEach((source, index) => {
+    if (!source.sourceUrl.trim() && !source.anchors.trim()) return;
+    if (!isValidUrl(source.sourceUrl, false)) {
+      errors.push(`Inbound internal-link source ${index + 1} needs a valid URL.`);
+    }
+  });
+  crawl.brokenLinks.forEach((link, index) => {
+    if (![link.url, link.statusCode, link.anchorText].some((value) => value.trim())) return;
+    if (!isValidUrl(link.url, false)) errors.push(`Broken link ${index + 1} needs a valid URL.`);
+  });
+  if (crawl.brokenLinkStatus === "found" && crawl.brokenLinks.length === 0) {
+    errors.push("A found broken-link status needs at least one broken-link record.");
+  }
+  if (cwv.sourceUrl.trim() && !isValidUrl(cwv.sourceUrl, false)) {
+    errors.push("Core Web Vitals source must be a valid HTTP(S) URL.");
+  }
 }
 
 function validateGoogleDemandEvidence(review: PageReviewRecord, errors: string[]) {

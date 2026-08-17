@@ -2,14 +2,27 @@ import { db } from "@/lib/db";
 import { fetchSearchAnalytics, fetchPageAnalytics } from "@/lib/google";
 import { replaceKeywordRows } from "@/lib/keyword-storage";
 import { getDateRange } from "@/lib/date-utils";
+import { freshnessFromLatestDate, safeMeasurementError } from "@/lib/measurement/run-ledger";
 
 interface SyncResult {
   success: boolean;
+  keywordsFetched: number;
   keywordsInserted: number;
   pagesInserted: number;
   startDate: string;
   endDate: string;
+  runId?: string;
+  latestDataDate?: string | null;
+  freshness?: string;
+  errorCode?: string;
   error?: string;
+}
+
+function latestDate(values: Array<{ date: string }>) {
+  return values.reduce<Date | null>((latest, value) => {
+    const date = new Date(`${value.date}T00:00:00.000Z`);
+    return Number.isNaN(date.getTime()) || (latest && latest >= date) ? latest : date;
+  }, null);
 }
 
 /**
@@ -21,6 +34,9 @@ export async function syncGSCDataForSite(
   siteId: string,
   daysBack: number = 28
 ): Promise<SyncResult> {
+  let runId: string | null = null;
+  let requestedStart = "";
+  let requestedEnd = "";
   try {
     // Verify site belongs to user
     const site = await db.site.findUnique({
@@ -36,12 +52,29 @@ export async function syncGSCDataForSite(
       throw new Error("Unauthorized: Site does not belong to user");
     }
 
+    // Get date range
+    const { start, end } = getDateRange(daysBack);
+    requestedStart = start;
+    requestedEnd = end;
+    const windowStart = new Date(`${start}T00:00:00.000Z`);
+    const windowEnd = new Date(`${end}T00:00:00.000Z`);
+    const run = await db.measurementSyncRun.create({
+      data: {
+        siteId,
+        source: "GSC",
+        status: "RUNNING",
+        windowStart,
+        windowEnd,
+      },
+    });
+    runId = run.id;
+
+    // A manual sync attempt is still a real run when the connection is
+    // missing. Creating the ledger row first makes that failure visible in
+    // measurement health instead of silently disappearing.
     if (!site.gscProperty) {
       throw new Error("Site does not have GSC property connected");
     }
-
-    // Get date range
-    const { start, end } = getDateRange(daysBack);
 
     console.log(`[GSC Sync] Starting sync for site ${siteId}`);
     console.log(`[GSC Sync] Date range: ${start} to ${end}`);
@@ -73,6 +106,7 @@ export async function syncGSCDataForSite(
 
     // Insert/update pages
     let pagesInserted = 0;
+    let pagesFailed = 0;
     for (const page of pages) {
       if (!page.page) continue;
 
@@ -106,8 +140,8 @@ export async function syncGSCDataForSite(
         });
 
         pagesInserted++;
-      } catch (error) {
-        console.warn(`[GSC Sync] Failed to upsert page: ${page.page}`, error);
+      } catch {
+        pagesFailed++;
       }
     }
 
@@ -115,24 +149,76 @@ export async function syncGSCDataForSite(
       `[GSC Sync] Sync completed: ${keywordsInserted} keywords, ${pagesInserted} pages`
     );
 
+    const latestDataDate = latestDate([...keywords, ...pages]);
+    const freshnessState = freshnessFromLatestDate("GSC", latestDataDate);
+    const completedRun = await db.measurementSyncRun.update({
+      where: { id: run.id },
+      data: {
+        status: pagesFailed ? "PARTIAL" : "SUCCESS",
+        rowsFetched: keywords.length + pages.length,
+        rowsWritten: keywordsInserted + pagesInserted,
+        latestDataDate,
+        freshnessState,
+        errorCode: pagesFailed ? "GSC_PAGE_ROWS_PARTIAL" : null,
+        errorMessage: pagesFailed
+          ? `${pagesFailed} page aggregate row${pagesFailed === 1 ? "" : "s"} could not be stored.`
+          : null,
+        finishedAt: new Date(),
+      },
+    });
+
     return {
       success: true,
+      keywordsFetched: keywords.length,
       keywordsInserted,
       pagesInserted,
       startDate: start,
       endDate: end,
+      runId: completedRun.id,
+      latestDataDate: completedRun.latestDataDate?.toISOString().slice(0, 10) ?? null,
+      freshness: completedRun.freshnessState.toLowerCase(),
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    console.error(`[GSC Sync] Error syncing site ${siteId}:`, errorMessage);
+    const missingConnection =
+      error instanceof Error &&
+      error.message === "Site does not have GSC property connected";
+    const errorCode = error instanceof Error && error.name === "ReauthRequiredError"
+      ? "REAUTH_REQUIRED"
+      : missingConnection
+        ? "GSC_NOT_CONNECTED"
+        : "GSC_SYNC_FAILED";
+    const safe = safeMeasurementError(
+      error,
+      errorCode,
+      missingConnection
+        ? "Site does not have GSC property connected."
+        : "Search Console synchronization failed.",
+    );
+    if (runId) {
+      await db.measurementSyncRun.update({
+        where: { id: runId },
+        data: {
+          status: "FAILED",
+          freshnessState: "UNKNOWN",
+          errorCode: safe.code,
+          errorMessage: safe.message,
+          finishedAt: new Date(),
+        },
+      }).catch(() => undefined);
+    }
+    console.error("[GSC Sync] Sync failed", { code: safe.code });
 
     return {
       success: false,
+      keywordsFetched: 0,
       keywordsInserted: 0,
       pagesInserted: 0,
-      startDate: "",
-      endDate: "",
-      error: errorMessage,
+      startDate: requestedStart,
+      endDate: requestedEnd,
+      runId: runId ?? undefined,
+      freshness: "unknown",
+      errorCode: safe.code,
+      error: safe.message,
     };
   }
 }

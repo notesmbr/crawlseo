@@ -52,6 +52,12 @@ assert.equal(minimal.googleTrends.method, null);
 assert.equal(minimal.measurementPlan.evidenceState, "missing");
 assert.equal(minimal.measurementPlan.gsc.clicks, null);
 assert.equal(minimal.measurementPlan.ga4.screenPageViews, null);
+assert.equal(minimal.mediaAccuracy.evidenceState, "missing");
+assert.equal(minimal.searchAppearance.evidenceState, "missing");
+assert.equal(minimal.readabilityUserFriendliness.evidenceState, "missing");
+assert.equal(minimal.technicalSnapshot.evidenceState, "missing");
+assert.equal(minimal.technicalSnapshot.crawl.pageStatusCode, null);
+assert.equal(minimal.technicalSnapshot.cwv.lcp, null);
 assert.deepEqual(minimal.gates.day56, {
   status: "not_due",
   dueAt: null,
@@ -77,6 +83,17 @@ assert.equal(normalized.googleTrendsEvidenceState, "MISSING");
 assert.equal(normalized.googleTrendsEvidenceDetails, null);
 assert.equal(normalized.measurementPlanEvidenceState, "MISSING");
 assert.equal(normalized.measurementPlanDetails, null);
+assert.equal(normalized.mediaAccuracyEvidenceState, "MISSING");
+assert.equal(normalized.mediaAccuracyDetails, null);
+assert.equal(normalized.searchAppearanceEvidenceState, "MISSING");
+assert.equal(normalized.searchAppearanceDetails, null);
+assert.equal(
+  normalized.readabilityUserFriendlinessEvidenceState,
+  "MISSING",
+);
+assert.equal(normalized.readabilityUserFriendlinessDetails, null);
+assert.equal(normalized.technicalSnapshotEvidenceState, "MISSING");
+assert.equal(normalized.technicalSnapshotDetails, null);
 
 const normalizedSameSiteLinks = normalizePageReviewInput(
   createPageReviewSchema.parse({
@@ -146,6 +163,13 @@ assert.equal(currentApi.keywordPlanner.evidenceState, "missing");
 assert.equal(currentApi.googleTrends.evidenceState, "missing");
 assert.equal(currentApi.measurementPlan.evidenceState, "missing");
 assert.equal(currentApi.measurementPlan.gsc.clicks, null);
+assert.equal(currentApi.mediaAccuracy.evidenceState, "missing");
+assert.equal(currentApi.searchAppearance.evidenceState, "missing");
+assert.equal(
+  currentApi.readabilityUserFriendliness.evidenceState,
+  "missing",
+);
+assert.equal(currentApi.technicalSnapshot.evidenceState, "missing");
 const fullWorkboardPriorityPatch = patchPageReviewSchema.parse({
   expectedVersion: current.version,
   reviewStatus: currentApi.reviewStatus,
@@ -774,6 +798,118 @@ assert.equal(
   "Google Trends evidence must point to an official Google source",
 );
 
+const structuredEvidenceCommon = {
+  checkedAt: "2026-08-14T12:00:00.000Z",
+  reviewer: "BlueStreamFly review team",
+  sources: [
+    {
+      label: "Reviewed canonical",
+      url: "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+      checkedAt: "2026-08-14T12:00:00.000Z",
+    },
+  ],
+  finding: "The applicable evidence was reviewed for this canonical.",
+  limitation: "One part of this evidence remains unavailable and is not represented as zero.",
+  notApplicableReason: null,
+};
+
+const mediaAccuracyEvidence = {
+  ...structuredEvidenceCommon,
+  evidenceState: "partial" as const,
+  inventoryComplete: false,
+  assets: [
+    {
+      placement: "Hero",
+      assetUrl: "/images/lochsa.webp",
+      sourceUrl: "https://commons.wikimedia.org/wiki/File:Lochsa_River_in_Clearwater_NF.jpg",
+      subjectLocation: "Lochsa River, Clearwater National Forest",
+      creator: "U.S. Forest Service Northern Region",
+      capturedAt: "2011-08-05",
+      licenseOrPermission: "CC BY 2.0",
+      attribution: "U.S. Forest Service Northern Region / CC BY 2.0",
+      altText: "Lochsa River flowing through Clearwater National Forest",
+      caption: "Representative Lochsa River photograph; not current conditions.",
+      accuracyStatus: "pass" as const,
+      relevanceStatus: "pass" as const,
+      desktopRenderStatus: "pass" as const,
+      mobileRenderStatus: "not_checked" as const,
+      limitation: "Mobile rendering remains to be checked.",
+    },
+  ],
+};
+
+const searchAppearanceEvidence = {
+  ...structuredEvidenceCommon,
+  evidenceState: "partial" as const,
+  rendered: {
+    title: "Lochsa River Fishing Report | Idaho",
+    metaDescription: "Current Lochsa River fishing report and trip guidance.",
+    canonical: "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+    openGraphTitle: "Lochsa River Fishing Report | Idaho",
+    openGraphDescription: "Current Lochsa River fishing report and trip guidance.",
+    twitterTitle: "Lochsa River Fishing Report | Idaho",
+    twitterDescription: "Current Lochsa River fishing report and trip guidance.",
+    socialImage: "/images/lochsa.webp",
+  },
+  google: {
+    query: "lochsa river fishing report",
+    locale: "Hollidaysburg, Pennsylvania",
+    device: "desktop" as const,
+    displayedTitle: "Lochsa River Fishing Report | Idaho",
+    displayedSnippet: "A current flow passage was selected by Google.",
+    snippetSource: "body_passage" as const,
+    bodyPassage: "USGS shows the current flow.",
+    titleRewrite: false,
+    reprocessingStatus: "stale" as const,
+  },
+  competitorPatterns: [],
+  proposedTitle: null,
+  proposedMetaDescription: null,
+};
+
+const readabilityUserFriendlinessEvidence = {
+  ...structuredEvidenceCommon,
+  evidenceState: "partial" as const,
+  checks: {
+    ...minimal.readabilityUserFriendliness.checks,
+    answerFirst: {
+      status: "pass" as const,
+      finding: "The first screen gives a direct trip recommendation.",
+    },
+  },
+};
+
+const technicalSnapshotEvidence = {
+  ...structuredEvidenceCommon,
+  evidenceState: "partial" as const,
+  crawl: {
+    crawlId: "crawl-1",
+    crawledAt: "2026-08-14T12:00:00.000Z",
+    status: "completed" as const,
+    pageStatusCode: 200,
+    indexable: true,
+    canonical: "https://bluestreamfly.com/fly-fishing-reports/idaho/lochsa-river",
+    schemaTypes: ["Article", "BreadcrumbList"],
+    internalLinksOut: 20,
+    inboundInternalLinks: 0,
+    inboundSources: [],
+    orphanStatus: "orphan" as const,
+    brokenLinkStatus: "none_found" as const,
+    brokenLinks: [],
+    missingReason: null,
+  },
+  cwv: {
+    evidenceState: "missing" as const,
+    sourceUrl: null,
+    device: null,
+    checkedAt: null,
+    lcp: null,
+    inp: null,
+    cls: null,
+    missingReason: "PageSpeed evidence was unavailable during this review.",
+  },
+};
+
 const approvedReviewInput = {
   ...minimal,
   keyword: {
@@ -837,6 +973,10 @@ const approvedReviewInput = {
       },
     ],
   },
+  mediaAccuracy: mediaAccuracyEvidence,
+  searchAppearance: searchAppearanceEvidence,
+  readabilityUserFriendliness: readabilityUserFriendlinessEvidence,
+  technicalSnapshot: technicalSnapshotEvidence,
   decision: {
     ...minimal.decision,
     state: "change_recommended" as const,
@@ -866,6 +1006,149 @@ const approvedReviewInput = {
     nextReviewAt: "2026-08-21T13:00:00.000Z",
   },
 };
+
+const approvedImplementationInput = {
+  ...approvedReviewInput,
+  manualChatState: "approved_to_implement" as const,
+  userDecisionReference: "User approved implementation in task 123",
+};
+
+for (const evidenceName of [
+  "mediaAccuracy",
+  "searchAppearance",
+  "readabilityUserFriendliness",
+  "technicalSnapshot",
+] as const) {
+  assert.equal(
+    createPageReviewSchema.safeParse({
+      ...approvedImplementationInput,
+      [evidenceName]: {
+        ...approvedImplementationInput[evidenceName],
+        evidenceState: "missing",
+      },
+    }).success,
+    false,
+    `${evidenceName} cannot remain missing once a review is approved`,
+  );
+}
+
+assert.equal(
+  createPageReviewSchema.safeParse({
+    ...approvedImplementationInput,
+    mediaAccuracy: {
+      ...mediaAccuracyEvidence,
+      evidenceState: "verified",
+      inventoryComplete: false,
+    },
+  }).success,
+  false,
+  "verified media evidence requires a complete inventory",
+);
+assert.equal(
+  createPageReviewSchema.safeParse({
+    ...approvedImplementationInput,
+    searchAppearance: {
+      ...searchAppearanceEvidence,
+      evidenceState: "verified",
+      google: {
+        ...searchAppearanceEvidence.google,
+        displayedSnippet: null,
+      },
+    },
+  }).success,
+  false,
+  "verified search appearance requires the actual displayed snippet",
+);
+assert.equal(
+  createPageReviewSchema.safeParse({
+    ...approvedImplementationInput,
+    readabilityUserFriendliness: {
+      ...readabilityUserFriendlinessEvidence,
+      evidenceState: "verified",
+    },
+  }).success,
+  false,
+  "verified usability evidence requires every named check",
+);
+assert.equal(
+  createPageReviewSchema.safeParse({
+    ...approvedImplementationInput,
+    technicalSnapshot: {
+      ...technicalSnapshotEvidence,
+      cwv: {
+        ...technicalSnapshotEvidence.cwv,
+        missingReason: null,
+      },
+    },
+  }).success,
+  false,
+  "partial technical evidence needs an explicit Core Web Vitals missing reason",
+);
+assert.equal(
+  createPageReviewSchema.safeParse({
+    ...approvedImplementationInput,
+    technicalSnapshot: {
+      ...technicalSnapshotEvidence,
+      evidenceState: "verified",
+      limitation: null,
+      cwv: {
+        evidenceState: "verified",
+        sourceUrl:
+          "https://pagespeed.web.dev/analysis/https-bluestreamfly-com/abc123",
+        device: "mobile",
+        checkedAt: "2026-08-14T12:00:00.000Z",
+        lcp: 0,
+        inp: 120,
+        cls: 0,
+        missingReason: null,
+      },
+    },
+  }).success,
+  false,
+  "zero LCP is rejected instead of being used as fake evidence",
+);
+assert.equal(
+  createPageReviewSchema.safeParse({
+    ...approvedImplementationInput,
+    technicalSnapshot: {
+      ...technicalSnapshotEvidence,
+      evidenceState: "verified",
+      limitation: null,
+      cwv: {
+        evidenceState: "verified",
+        sourceUrl:
+          "https://pagespeed.web.dev/analysis/https-bluestreamfly-com/abc123",
+        device: "mobile",
+        checkedAt: "2026-08-14T12:00:00.000Z",
+        lcp: 2.1,
+        inp: 120,
+        cls: 0,
+        missingReason: null,
+      },
+    },
+  }).success,
+  true,
+  "verified technical evidence accepts measured zero inbound links and zero CLS",
+);
+
+for (const evidenceName of [
+  "searchAppearance",
+  "readabilityUserFriendliness",
+  "technicalSnapshot",
+] as const) {
+  assert.equal(
+    createPageReviewSchema.safeParse({
+      ...approvedImplementationInput,
+      [evidenceName]: {
+        ...approvedImplementationInput[evidenceName],
+        evidenceState: "not_applicable",
+        notApplicableReason: "This check was intentionally excluded for the test.",
+      },
+    }).success,
+    false,
+    `${evidenceName} cannot be not_applicable for an indexable page`,
+  );
+}
 
 const approvedWithoutMeasurementPlan = {
   ...approvedReviewInput,
@@ -1200,6 +1483,14 @@ const completeReviewInput = {
     differentiationEvidenceState: "not_applicable" as const,
   },
   eeat: { ...minimal.eeat, evidenceState: "not_applicable" as const },
+  mediaAccuracy: {
+    ...minimal.mediaAccuracy,
+    evidenceState: "not_applicable" as const,
+    notApplicableReason: "This reviewed utility page contains no editorial media.",
+  },
+  searchAppearance: searchAppearanceEvidence,
+  readabilityUserFriendliness: readabilityUserFriendlinessEvidence,
+  technicalSnapshot: technicalSnapshotEvidence,
   decision: {
     ...minimal.decision,
     state: "no_change" as const,
@@ -2095,9 +2386,11 @@ const [
   evidenceMigration,
   monitoringMigration,
   demandEvidenceMigration,
+  structuredEvidenceMigration,
   collectionRoute,
   itemRoute,
   seedScript,
+  lochsaBackfillScript,
   packageSource,
 ] = await Promise.all([
     readFile(new URL("../prisma/schema.prisma", import.meta.url), "utf8"),
@@ -2137,6 +2430,13 @@ const [
       "utf8",
     ),
     readFile(
+      new URL(
+        "../prisma/migrations/20260817120000_add_structured_page_review_evidence/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(
       new URL("../app/api/sites/[siteId]/page-reviews/route.ts", import.meta.url),
       "utf8",
     ),
@@ -2148,6 +2448,13 @@ const [
       "utf8",
     ),
     readFile(new URL("./seed-page-reviews.mts", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "./backfill-lochsa-structured-review-evidence.mts",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -2166,6 +2473,28 @@ assert.match(
   /googleTrendsEvidenceState\s+EvidenceState @default\(MISSING\)/,
 );
 assert.match(schema, /googleTrendsEvidenceDetails\s+Json\?/);
+for (const group of [
+  "mediaAccuracy",
+  "searchAppearance",
+  "readabilityUserFriendliness",
+  "technicalSnapshot",
+]) {
+  assert.match(
+    schema,
+    new RegExp(`${group}EvidenceState\\s+EvidenceState @default\\(MISSING\\)`),
+  );
+  assert.match(schema, new RegExp(`${group}Details\\s+Json\\?`));
+  assert.match(
+    structuredEvidenceMigration,
+    new RegExp(
+      `ADD COLUMN "${group}EvidenceState" "EvidenceState" NOT NULL DEFAULT 'MISSING'`,
+    ),
+  );
+  assert.match(
+    structuredEvidenceMigration,
+    new RegExp(`ADD COLUMN "${group}Details" JSONB`),
+  );
+}
 assert.match(schema, /enum SerpCompetition \{/);
 assert.match(schema, /enum ManualChatState \{[\s\S]*\bMONITORING\b[\s\S]*\bCOMPLETE\b/);
 assert.match(schema, /userDecisionReference String\?/);
@@ -2268,7 +2597,48 @@ assert.match(seedScript, /keywordPlannerEvidenceState: "MISSING"/);
 assert.match(seedScript, /keywordPlannerEvidenceDetails: Prisma\.DbNull/);
 assert.match(seedScript, /googleTrendsEvidenceState: "MISSING"/);
 assert.match(seedScript, /googleTrendsEvidenceDetails: Prisma\.DbNull/);
+for (const group of [
+  "mediaAccuracy",
+  "searchAppearance",
+  "readabilityUserFriendliness",
+  "technicalSnapshot",
+]) {
+  assert.match(seedScript, new RegExp(`${group}EvidenceState: "MISSING"`));
+  assert.match(seedScript, new RegExp(`${group}Details: Prisma\\.DbNull`));
+}
 assert.match(seedScript, /no synchronization or scheduling was installed/);
+assert.match(lochsaBackfillScript, /argumentValue\("--canonical"\)/);
+assert.match(lochsaBackfillScript, /argumentValue\("--version"\)/);
+assert.match(lochsaBackfillScript, /process\.argv\.includes\("--apply"\)/);
+assert.match(lochsaBackfillScript, /const changedFields = \[\.\.\.CHANGED_FIELDS\]/);
+assert.match(
+  lochsaBackfillScript,
+  /never writes[\s\S]*Keep the revision audit truthful/,
+);
+assert.match(lochsaBackfillScript, /normalizePageReviewPatch/);
+assert.match(lochsaBackfillScript, /TransactionIsolationLevel\.Serializable/);
+assert.match(lochsaBackfillScript, /pageReviewRevision\.create/);
+assert.match(
+  lochsaBackfillScript,
+  /CrawlSEO had no Lochsa VitalsReport row[\s\S]*no LCP, INP, or CLS value is inferred/,
+);
+assert.match(
+  lochsaBackfillScript,
+  /no Lochsa Core Web Vitals row or canonical GA4 aggregate[\s\S]*never as zero/,
+);
+const lochsaBackfillUpdate = lochsaBackfillScript.slice(
+  lochsaBackfillScript.indexOf(
+    "const update = await transaction.pageReview.updateMany",
+  ),
+  lochsaBackfillScript.indexOf(
+    'throw new Error("Version conflict while backfilling Lochsa evidence")',
+  ),
+);
+assert.doesNotMatch(
+  lochsaBackfillUpdate,
+  /day7|day28|day56|reviewStatus|manualChatState|changeState/,
+  "the one-off backfill cannot mutate monitoring or due-gate fields",
+);
 assert.match(packageSource, /"page-reviews:seed"/);
 
 const summarySelect = collectionRoute.slice(

@@ -100,6 +100,8 @@ model Site {
   rankSnapshots RankSnapshot[]
   pageReviews PageReview[]
   pageReviewRevisions PageReviewRevision[]
+  ga4PageMetrics Ga4PageMetric[]
+  measurementSyncRuns MeasurementSyncRun[]
 
   @@unique([userId, domain])
 }
@@ -161,6 +163,15 @@ model PageReview {
   eeatGaps     Json?
   eeatEvidenceDetails Json?
   eeatEvidenceState EvidenceState @default(MISSING)
+
+  mediaAccuracyEvidenceState EvidenceState @default(MISSING)
+  mediaAccuracyDetails       Json?
+  searchAppearanceEvidenceState EvidenceState @default(MISSING)
+  searchAppearanceDetails       Json?
+  readabilityUserFriendlinessEvidenceState EvidenceState @default(MISSING)
+  readabilityUserFriendlinessDetails       Json?
+  technicalSnapshotEvidenceState EvidenceState @default(MISSING)
+  technicalSnapshotDetails       Json?
 
   decisionState     PageDecisionState @default(PENDING)
   decisionRationale String?
@@ -346,6 +357,38 @@ enum EvidenceState {
   NOT_APPLICABLE
 }
 
+enum MeasurementSource {
+  GSC
+  GA4
+  PAGESPEED
+}
+
+enum MeasurementRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum MeasurementFreshnessState {
+  CURRENT
+  STALE
+  NO_DATA
+  UNKNOWN
+}
+
+enum MeasurementTrafficScope {
+  ORGANIC_SEARCH
+}
+
+enum VitalsEvidenceState {
+  MISSING
+  AVAILABLE
+  NO_URL_LEVEL_DATA
+  QUOTA_EXHAUSTED
+  FAILED
+}
+
 enum ManualChatState {
   AWAITING_USER_SELECTION
   RESEARCHING
@@ -425,6 +468,55 @@ enum PageReviewChangeType {
   DELETED
   RESTORED
   SEEDED
+}
+
+// ============ MEASUREMENT IMPORTS ============
+
+model MeasurementSyncRun {
+  id              String                    @id @default(cuid())
+  siteId          String
+  source          MeasurementSource
+  status          MeasurementRunStatus      @default(RUNNING)
+  canonicalUrl    String?
+  windowStart     DateTime?
+  windowEnd       DateTime?
+  rowsFetched     Int                       @default(0)
+  rowsWritten     Int                       @default(0)
+  latestDataDate  DateTime?
+  freshnessState  MeasurementFreshnessState @default(UNKNOWN)
+  errorCode       String?
+  errorMessage    String?
+  startedAt       DateTime                  @default(now())
+  finishedAt      DateTime?
+
+  site            Site                      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  ga4PageMetrics  Ga4PageMetric[]
+  vitalsReports   VitalsReport[]
+
+  @@index([siteId, source, startedAt])
+  @@index([siteId, canonicalUrl, source, startedAt])
+}
+
+model Ga4PageMetric {
+  id              String                  @id @default(cuid())
+  siteId          String
+  syncRunId       String?
+  canonicalUrl    String
+  date            DateTime
+  trafficScope    MeasurementTrafficScope @default(ORGANIC_SEARCH)
+  screenPageViews Int                     @default(0)
+  sessions        Int                     @default(0)
+  engagedSessions Int                     @default(0)
+  activeUsers     Int                     @default(0)
+  keyEvents       Float                   @default(0)
+  importedAt      DateTime                @default(now())
+
+  site            Site                    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  syncRun         MeasurementSyncRun?      @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
+
+  @@unique([siteId, canonicalUrl, date, trafficScope])
+  @@index([siteId, canonicalUrl, date])
+  @@index([syncRunId])
 }
 
 // ============ GSC DATA ============
@@ -648,11 +740,19 @@ enum IssueSeverity {
 // ============ CORE WEB VITALS ============
 
 model VitalsReport {
-  id          String   @id @default(cuid())
-  siteId      String
-  url         String
-  date        DateTime @default(now())
-  device      String   // MOBILE or DESKTOP
+  id                      String              @id @default(cuid())
+  siteId                  String
+  syncRunId               String?
+  url                     String
+  date                    DateTime            @default(now())
+  device                  String              // MOBILE or DESKTOP
+  evidenceState           VitalsEvidenceState @default(MISSING)
+  source                  String              @default("PAGESPEED_INSIGHTS")
+  analysisAt              DateTime?
+  fieldDataCategory       String?
+  originFieldDataAvailable Boolean?
+  errorCode               String?
+  errorMessage            String?
 
   // Core Web Vitals
   lcp         Float?   // Largest Contentful Paint (seconds)
@@ -665,10 +765,12 @@ model VitalsReport {
   speedIndex  Float?   // Speed Index (seconds)
   ttfb        Float?   // Time to First Byte (seconds)
 
-  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  site        Site                @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  syncRun     MeasurementSyncRun? @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
 
   @@index([siteId, date])
   @@index([siteId, url, date])
+  @@index([syncRunId])
 }
 
 // ============ ALERTS ============
